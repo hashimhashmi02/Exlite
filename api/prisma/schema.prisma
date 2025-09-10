@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ClosedOrder ClosedOrder[]
+}
+
+
+
+enum OrderSide {
+  LONG
+  SHORT
+}
+
+model Asset {
+  id          Int           @id @default(autoincrement())
+  symbol      String        @unique
+  name        String
+  imageUrl    String
+  decimals    Int           
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  closedOrders ClosedOrder[]
+}
+
+model ClosedOrder {
+  id         String     @id @default(cuid()) 
+  userId     Int
+  assetId    Int
+  side       OrderSide
+  margin     BigInt     @db.BigInt   
+  leverage   Int
+  entryPrice BigInt     @db.BigInt   
+  exitPrice  BigInt     @db.BigInt   
+  pnl        BigInt     @db.BigInt   
+  createdAt  DateTime   @default(now())
+  closedAt   DateTime   @default(now())
+
+  user   User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  asset  Asset @relation(fields: [assetId], references: [id])
+
+  @@index([userId])
+  @@index([assetId])
+}
+
+
+model Snapshot {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
