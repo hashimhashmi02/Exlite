@@ -20,13 +20,12 @@ export async function persistNow() {
     update: { data },
     create: { key: KEY, data }
   });
-  // console.log('💾 snapshot saved');
+  
 }
 
 export async function restoreFromDB() {
   const row = await prisma.snapshot.findUnique({ where: { key: KEY } });
   if (!row?.data) return false;
-  // TS hint: data any hai — assume it matches EngineState shape
   restoreState(row.data as EngineState);
   return true;
 }
@@ -34,7 +33,6 @@ export async function restoreFromDB() {
 export async function loadAndEnsure() {
   const ok = await restoreFromDB();
   if (!ok) {
-    // No prior snapshot — create initial snapshot so next diff is small
     await persistNow();
   }
 }

@@ -1,4 +1,3 @@
-// web/src/components/ChartPanel.tsx
 import { useEffect, useRef, useState } from "react";
 import { trading } from "../lib/api";
 import { createChart, ColorType } from "lightweight-charts";
@@ -6,12 +5,12 @@ import { createChart, ColorType } from "lightweight-charts";
 export default function ChartPanel({ asset }: { asset: string | null }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
-  // keep references (use any to dodge over-strict TS on some setups)
+
   const chartRef = useRef<any>(null);
   const seriesRef = useRef<any>(null);
   const [title, setTitle] = useState("—");
 
-  // initialize chart once
+
   useEffect(() => {
     if (!wrapRef.current) return;
 
@@ -41,7 +40,6 @@ export default function ChartPanel({ asset }: { asset: string | null }) {
     chartRef.current = chart;
     seriesRef.current = series;
 
-    // auto-resize to the pane
     const ro = new ResizeObserver((entries) => {
       const r = entries[0].contentRect;
       chart.applyOptions({ width: Math.floor(r.width), height: Math.floor(r.height) });
@@ -56,7 +54,6 @@ export default function ChartPanel({ asset }: { asset: string | null }) {
     };
   }, []);
 
-  // load + refresh candles
   useEffect(() => {
     let timer: any;
     async function load() {
@@ -66,9 +63,9 @@ export default function ChartPanel({ asset }: { asset: string | null }) {
         return;
       }
       setTitle(asset);
-      const rows = await trading.klines(asset, 240); // [time, open, high, low, close, volume]
+      const rows = await trading.klines(asset, 240);
       const data = rows.map((r) => ({
-        time: Math.floor(r[0] / 1000), // seconds
+        time: Math.floor(r[0] / 1000),
         open: Number(r[1]),
         high: Number(r[2]),
         low:  Number(r[3]),

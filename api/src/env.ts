@@ -2,6 +2,12 @@ import 'dotenv/config';
 import { z } from 'zod';
 
 const EnvSchema = z.object({
+  SMTP_HOST: z.string().default('smtp.gmail.com'),
+  SMTP_PORT: z.string().default('465'),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  DEFAULT_SPREAD_BIPS: z.string().default('16'),   // 0.16% total spread
+  DEV_EMAIL_ECHO: z.string().default('true'),
   PORT: z.coerce.number().default(8080),
   BACKEND_URL: z.string().url().default('http://localhost:8080'),
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
@@ -12,6 +18,7 @@ const EnvSchema = z.object({
   REDIS_URL: z.string().url().default('redis://127.0.0.1:6379'),
 
 });
+
 
 const parsed = EnvSchema.safeParse(process.env);
 if (!parsed.success) {

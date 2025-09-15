@@ -4,7 +4,6 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { z } from 'zod';
 import { env, isProd } from './env.js';
-import { sendSignInEmail } from './email.js';
 import { createMagicToken, verifyMagicToken, createSessionToken, verifySessionToken } from './auth.js';
 import { requireAuth, getUserEmail } from './middleware.js';
 import { initPricesFromDB, openTrade, closeTrade, getUsdBalance } from './engine.js';
@@ -12,7 +11,8 @@ import { getHumanPrice, setHumanPrice } from './engine.js';
 import { initCandles, getKlines } from './candles.js';
 import { startPriceSubscriber } from './engine.js';
 import { loadAndEnsure, persistNow } from './snapshot.js';
-import { listOpenOrdersByEmail } from './engine.js';
+import { listOpenOrdersByEmail, getPrice } from './engine.js';
+import { sendMagicLinkEmail } from './email.js'; // ✅ use the actual export
 
 const app = express();
 app.use(express.json());
@@ -27,6 +27,8 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 
 const EmailBody = z.object({ email: z.string().email() });
 
+/* ---------------- Auth ---------------- */
+
 app.post('/api/v1/signup', async (req, res) => {
   const parsed = EmailBody.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid email' });
@@ -36,7 +38,8 @@ app.post('/api/v1/signup', async (req, res) => {
   const magicUrl = `${env.BACKEND_URL}/api/v1/signin/post?token=${encodeURIComponent(token)}`;
 
   try {
-    await sendSignInEmail(email, magicUrl);
+    if (process.env.NODE_ENV !== 'production') console.log('Magic link:', magicUrl);
+    await sendMagicLinkEmail(email, magicUrl);
     return res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('Email error:', e?.message || e);
@@ -53,7 +56,8 @@ app.post('/api/v1/signin', async (req, res) => {
   const magicUrl = `${env.BACKEND_URL}/api/v1/signin/post?token=${encodeURIComponent(token)}`;
 
   try {
-    await sendSignInEmail(email, magicUrl);
+    if (process.env.NODE_ENV !== 'production') console.log('Magic link:', magicUrl);
+    await sendMagicLinkEmail(email, magicUrl);
     return res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('Email error:', e?.message || e);
@@ -90,6 +94,7 @@ app.get('/api/v1/signin/post', async (req, res) => {
     return res.status(400).send('Invalid or expired token');
   }
 });
+
 app.get('/api/v1/me', (req, res) => {
   const token = req.cookies?.session as string | undefined;
   if (!token) return res.status(401).json({ authenticated: false });
@@ -102,25 +107,18 @@ app.get('/api/v1/me', (req, res) => {
   }
 });
 
-app.get('/api/v1/openOrders', requireAuth, async (req, res) => {
-  const email = (req as any).email || (req as any).user?.email || (req as any).userEmail;
-  if (!email) return res.status(401).json({ error: 'No session' });
-  const orders = listOpenOrdersByEmail(email);
-  res.json({ orders });
-});
-
-
-
+/* ------------- Admin snapshot ------------- */
 app.get('/api/v1/admin/snapshot', requireAuth, async (_req, res) => {
   const row = await prisma.snapshot.findUnique({ where: { key: 'engine_state' } });
   res.json(row ?? {});
 });
 
-
 app.post('/api/v1/admin/snapshot/save', requireAuth, async (_req, res) => {
   await persistNow();
   res.json({ ok: true });
 });
+
+/* ------------- Assets & Market Data ------------- */
 
 app.get('/api/v1/supportedAssets', async (_req, res) => {
   const rows = await prisma.asset.findMany({
@@ -129,12 +127,65 @@ app.get('/api/v1/supportedAssets', async (_req, res) => {
   res.json({ assets: rows });
 });
 
+app.get('/api/v1/price', async (req, res) => {
+  const asset = String(req.query.asset || '');
+  if (!asset) return res.status(400).json({ error: 'asset required' });
+  const out = await getHumanPrice(asset);
+  if (!out) return res.status(404).json({ error: 'price unavailable' });
+  return res.json(out);
+});
+
+/** (b) Quotes: Bid/Ask/Mid derived from mid-price + spread (bips) */
+app.get('/api/v1/quotes', requireAuth, async (req, res) => {
+  const assetsParam = String(req.query.assets || '');
+  const symbols = assetsParam
+    ? assetsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    : [];
+
+  const spreadBips = Number(req.query.spreadBips || 16); // default 0.16%
+
+  const out: Record<string, { symbol: string; bid: number; ask: number; mid: number; decimals: number }> = {};
+  for (const sym of symbols) {
+    const pe = getPrice(sym);
+    if (!pe) continue;
+    const mid = Number(pe.price) / 10 ** pe.decimal;
+    const half = mid * (spreadBips / 20000); // half spread
+    out[sym] = {
+      symbol: sym,
+      bid: mid - half,
+      ask: mid + half,
+      mid,
+      decimals: pe.decimal
+    };
+  }
+  res.json({ quotes: out, spreadBips });
+});
+
+app.get('/api/v1/klines', async (req, res) => {
+  const asset = String(req.query.asset || '');
+  const interval = String(req.query.interval || '1m');
+  const limit = Number(req.query.limit || 60);
+
+  if (!asset) return res.status(400).json({ error: 'asset required' });
+  if (interval !== '1m') return res.status(400).json({ error: 'only 1m supported for now' });
+  if (!Number.isFinite(limit) || limit <= 0 || limit > 2000) {
+    return res.status(400).json({ error: 'invalid limit' });
+  }
+
+  const data = getKlines(asset, limit);
+  if (!data.length) return res.status(404).json({ error: 'no candles' });
+
+  return res.json(data);
+});
+
+/* ---------------- Trading ---------------- */
+
 const CreateTradeBody = z.object({
   asset: z.string().min(1),
   type: z.enum(['long', 'short']),
   margin: z.number().int().positive(),
   leverage: z.number().int().min(1).max(100),
-  slippage: z.number().int().min(0).max(10_000) 
+  slippage: z.number().int().min(0).max(10_000)
 });
 
 app.post('/api/v1/trade/create', requireAuth, async (req, res) => {
@@ -159,7 +210,6 @@ app.post('/api/v1/trade/create', requireAuth, async (req, res) => {
     return res.status(400).json({ error: e?.message || 'Trade open failed' });
   }
 });
-
 
 const CloseTradeBody = z.object({ orderId: z.string().min(1) });
 app.post('/api/v1/trade/close', requireAuth, async (req, res) => {
@@ -190,16 +240,6 @@ app.get('/api/v1/balance', requireAuth, async (_req, res) => {
   return res.json(resp);
 });
 
-
-app.get('/api/v1/price', async (req, res) => {
-  const asset = String(req.query.asset || '');
-  if (!asset) return res.status(400).json({ error: 'asset required' });
-  const out = await getHumanPrice(asset);
-  if (!out) return res.status(404).json({ error: 'price unavailable' });
-  return res.json(out);
-});
-
-
 app.post('/api/v1/admin/price', requireAuth, async (req, res) => {
   if (isProd) return res.status(403).json({ error: 'disabled in production' });
   const { asset, price } = req.body || {};
@@ -221,27 +261,40 @@ app.post('/api/v1/admin/redis/publish', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/v1/klines', async (req, res) => {
-  const asset = String(req.query.asset || '');
-  const interval = String(req.query.interval || '1m');
-  const limit = Number(req.query.limit || 60);
-
-  if (!asset) return res.status(400).json({ error: 'asset required' });
-  if (interval !== '1m') return res.status(400).json({ error: 'only 1m supported for now' });
-  if (!Number.isFinite(limit) || limit <= 0 || limit > 2000) {
-    return res.status(400).json({ error: 'invalid limit' });
-  }
-
-  const data = getKlines(asset, limit);
-  if (!data.length) return res.status(404).json({ error: 'no candles' });
-
-  return res.json(data);
+app.get('/api/v1/openOrders', requireAuth, async (req, res) => {
+  const email = (req as any).email || (req as any).user?.email || (req as any).userEmail;
+  if (!email) return res.status(401).json({ error: 'No session' });
+  const orders = listOpenOrdersByEmail(email);
+  res.json({ orders });
 });
+app.get('/api/v1/closedOrders', requireAuth, async (req, res) => {
+  const email = getUserEmail(req);
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user) return res.json({ orders: [] });
 
+  const rows = await prisma.closedOrder.findMany({
+    where: { userId: user.id },
+    orderBy: { id: 'desc' },
+    include: { asset: true }
+  }) as any[];
+
+  const orders = rows.map(r => ({
+    orderId: String(r.id),
+    asset: r.asset?.symbol ?? r.assetSymbol ?? '—',
+    side: r.side,
+    marginCents: r.margin?.toString?.() ?? '0',
+    leverage: Number(r.leverage ?? 0),
+    entryPrice: r.entryPrice?.toString?.() ?? '0',
+    exitPrice: r.exitPrice?.toString?.() ?? '0',
+    assetDecimals: Number(r.asset?.decimals ?? r.decimals ?? 2),
+    pnlCents: r.pnl?.toString?.() ?? '0',
+  }));
+
+  res.json({ orders });
+});
 
 await initPricesFromDB();
 await loadAndEnsure();
-
 
 {
   const assets = await prisma.asset.findMany({ select: { symbol: true } });
@@ -258,4 +311,3 @@ await startPriceSubscriber('prices');
 app.listen(env.PORT, () => {
   console.log(`🚀 API listening on http://localhost:${env.PORT}`);
 });
-

@@ -1,5 +1,6 @@
 export type Me = { authenticated: boolean; email?: string };
 export type Asset = { symbol: string; name: string; imageUrl: string };
+export type Quote = { symbol:string; bid:number; ask:number; mid:number; decimals:number };
 
 const BASE = import.meta.env.VITE_API_URL || '';
 
@@ -48,20 +49,25 @@ export type TradeCreateResp = { orderId: string };
 export type TradeCloseResp = { orderId: string; pnl: string }; // cents-as-string
 
 
-export type OpenOrderDTO = {
-  orderId: string;
-  asset: string;
-  side: 'LONG' | 'SHORT';
-  marginCents: string;    
-  leverage: number;
-  entryPrice: string;      
-  assetDecimals: number;
+
+export const quotes = {
+  get: (assets: string[]): Promise<{ quotes: Record<string, Quote>, spreadBips:number }> =>
+    fetch(`${BASE}/api/v1/quotes?assets=${encodeURIComponent(assets.join(','))}`, { credentials:'include' })
+      .then(res => j<{ quotes: Record<string, Quote>, spreadBips:number }>(res)),
 };
 
+export type OpenOrderDTO = {
+  orderId: string; asset: string; side: 'LONG'|'SHORT';
+  marginCents: string; leverage: number;
+  entryPrice: string; assetDecimals: number;
+};
 export const orders = {
   open: (): Promise<{ orders: OpenOrderDTO[] }> =>
-    fetch(`${BASE}/api/v1/openOrders`, { credentials: 'include' })
-      .then((res) => j<{ orders: OpenOrderDTO[] }>(res)),
+    fetch(`${BASE}/api/v1/openOrders`, { credentials:'include' })
+      .then(res => j<{ orders: OpenOrderDTO[] }>(res)),
+  closed: (): Promise<{ orders: any[] }> =>
+    fetch(`${BASE}/api/v1/closedOrders`, { credentials:'include' })
+      .then(res => j<{ orders: any[] }>(res)),
 };
 
 

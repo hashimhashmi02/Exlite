@@ -1,4 +1,3 @@
-// api/src/engine.ts
 import { prisma } from './db.js';
 import { randomUUID } from 'crypto';
 import { toScaledBigInt, fromScaledBigInt } from './utils/decimal.js';
@@ -6,7 +5,7 @@ import { recordPrice } from './candles.js';
 import { redisSub } from './redis.js';
 import { scheduleSnapshotSave } from './snapshot.js';
 
-// ---------------- Types ----------------
+
 export type OrderSide = 'LONG' | 'SHORT';
 
 type PriceEntry = { price: bigint; decimal: number };
@@ -18,9 +17,9 @@ type OpenOrder = {
   email: string;
   asset: string;
   side: OrderSide;
-  margin: bigint;        // USD (2 decimals)
+  margin: bigint;       
   leverage: number;
-  entryPrice: bigint;    // scaled by asset.decimals
+  entryPrice: bigint;    
   assetDecimals: number;
 };
 
@@ -39,14 +38,13 @@ export type EngineState = {
   }>;
 };
 
-// ---------------- In-memory state ----------------
+
 const PRICES: PricesMap = {};
 const USD_BALANCE: Bal = {};
 const USD_LOCKED: Bal = {};
 const OPEN_ORDERS: Record<string, OpenOrder> = {};
 const USD_DECIMALS = 2;
 
-// ---------------- Price helpers ----------------
 export async function initPricesFromDB() {
   const assets = await prisma.asset.findMany();
   for (const a of assets) {
@@ -69,7 +67,7 @@ export function getPrice(symbol: string): PriceEntry | undefined {
   return PRICES[symbol];
 }
 
-// ---- human price (dev utility) ----
+
 export async function setHumanPrice(symbol: string, price: number | string) {
   const asset = await prisma.asset.findUnique({ where: { symbol } });
   if (!asset) throw new Error('Unsupported asset');
@@ -77,7 +75,7 @@ export async function setHumanPrice(symbol: string, price: number | string) {
 
   setPrice(symbol, scaled, asset.decimals);
   recordPrice(symbol, Number(price));
-  scheduleSnapshotSave(); // state changed
+  scheduleSnapshotSave(); 
 }
 
 export async function getHumanPrice(symbol: string) {
@@ -86,7 +84,7 @@ export async function getHumanPrice(symbol: string) {
   return { symbol, price: fromScaledBigInt(pe.price, pe.decimal), decimals: pe.decimal, raw: pe.price.toString() };
 }
 
-// ---------------- Balance helpers ----------------
+
 export function ensureUsdBalance(email: string) {
   if (!(email in USD_BALANCE)) USD_BALANCE[email] = BigInt(1_000_000); // $10,000
   if (!(email in USD_LOCKED)) USD_LOCKED[email] = 0n;
@@ -97,7 +95,7 @@ export function getUsdBalance(email: string) {
   return { free, locked: USD_LOCKED[email], total: USD_BALANCE[email] };
 }
 
-// ---------------- Open / Close trades ----------------
+
 export async function openTrade(params: {
   email: string,
   asset: string,
@@ -119,7 +117,7 @@ export async function openTrade(params: {
   const pe = getPrice(asset.symbol);
   if (!pe) throw new Error('Price unavailable');
 
-  // lock margin
+
   USD_LOCKED[params.email] += params.marginCents;
 
   const orderId = randomUUID();
@@ -134,7 +132,7 @@ export async function openTrade(params: {
     assetDecimals: asset.decimals
   };
 
-  scheduleSnapshotSave(); // state changed
+  scheduleSnapshotSave(); 
   return { orderId };
 }
 
@@ -145,16 +143,15 @@ export async function closeTrade(params: { orderId: string }) {
   const pe = getPrice(oo.asset);
   if (!pe) throw new Error('Price unavailable');
 
-  const exposure = oo.margin * BigInt(oo.leverage); // USD cents
-  const delta = pe.price - oo.entryPrice;            // scaled
-  let pnl = (delta * exposure) / oo.entryPrice;      // USD cents
+  const exposure = oo.margin * BigInt(oo.leverage); 
+  const delta = pe.price - oo.entryPrice;            
+  let pnl = (delta * exposure) / oo.entryPrice;      
   if (oo.side === 'SHORT') pnl = -pnl;
 
-  // release margin + apply pnl
+
   USD_LOCKED[oo.email] -= oo.margin;
   USD_BALANCE[oo.email] += oo.margin + pnl;
 
-  // persist closed order
   const user = await prisma.user.findUnique({ where: { email: oo.email } });
   const asset = await prisma.asset.findUnique({ where: { symbol: oo.asset } });
   if (!user || !asset) throw new Error('Invariant failed');
@@ -174,11 +171,9 @@ export async function closeTrade(params: { orderId: string }) {
   });
 
   delete OPEN_ORDERS[params.orderId];
-  scheduleSnapshotSave(); // state changed
+  scheduleSnapshotSave(); 
   return { pnl };
 }
-
-// ----------- State snapshot (serialize BigInt as string) -------------
 export function dumpState(): EngineState {
   const prices: EngineState['prices'] = {};
   for (const [sym, p] of Object.entries(PRICES)) {
@@ -209,18 +204,15 @@ export function dumpState(): EngineState {
 }
 
 export function restoreState(state: EngineState) {
-  // prices
+
   for (const [sym, p] of Object.entries(state.prices || {})) {
     setPrice(sym, BigInt(p.price), p.decimal);
   }
 
-  // balances
   for (const [email, b] of Object.entries(state.balances || {})) {
     USD_BALANCE[email] = BigInt(b.total);
     USD_LOCKED[email] = BigInt(b.locked);
   }
-
-  // open orders
   for (const [id, o] of Object.entries(state.openOrders || {})) {
     OPEN_ORDERS[id] = {
       orderId: o.orderId,
@@ -235,24 +227,18 @@ export function restoreState(state: EngineState) {
   }
 }
 
-
-
-// List open orders for a user (DTO for API)
 export function listOpenOrdersByEmail(email: string) {
   const rows = Object.values(OPEN_ORDERS).filter(o => o.email === email);
   return rows.map(o => ({
     orderId: o.orderId,
     asset: o.asset,
     side: o.side,
-    marginCents: o.margin.toString(),     // string to avoid bigint issues
+    marginCents: o.margin.toString(),    
     leverage: o.leverage,
-    entryPrice: o.entryPrice.toString(),  // scaled
-    assetDecimals: o.assetDecimals
+    entryPrice: o.entryPrice.toString(),  
   }));
 }
 
-
-// ----------- Redis subscriber (prices channel) -------------
 export async function startPriceSubscriber(channel = 'prices') {
   await redisSub.subscribe(channel);
   console.log(`📡 Subscribed to Redis channel: ${channel}`);
@@ -278,7 +264,7 @@ export async function startPriceSubscriber(channel = 'prices') {
         touched = true;
       }
 
-      if (touched) scheduleSnapshotSave(); // state changed
+      if (touched) scheduleSnapshotSave(); 
     } catch (e) {
       console.error('price msg parse error:', e);
     }
