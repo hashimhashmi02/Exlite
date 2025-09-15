@@ -1,10 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  createChart,
-  ColorType,
-  type CandlestickData,
-  type ISeriesApi,
-} from "lightweight-charts";
+import { createChart, ColorType } from "lightweight-charts";
 import { trading } from "../lib/api";
 
 type Bar = { time: number; open: number; high: number; low: number; close: number };
@@ -55,12 +50,13 @@ export default function ChartPanel({ asset }: { asset: string | null }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
-  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const seriesRef = useRef<any | null>(null);
   const lastBarRef = useRef<Bar | null>(null);
   const timerRef = useRef<number | null>(null);
   const roRef = useRef<ResizeObserver | null>(null);
 
   const [title, setTitle] = useState("—");
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     if (!wrapRef.current || chartRef.current) return;
@@ -90,6 +86,7 @@ export default function ChartPanel({ asset }: { asset: string | null }) {
       borderVisible: false,
     });
     seriesRef.current = series;
+    setReady(true);
 
     // Resize handling
     const fit = () => {
@@ -111,26 +108,27 @@ export default function ChartPanel({ asset }: { asset: string | null }) {
         chartRef.current = null;
       }
       seriesRef.current = null;
+      setReady(false);
     };
   }, []);
 
   // Seed + live updates
   useEffect(() => {
-    if (!asset || !seriesRef.current) {
+    if (!asset || !ready || !seriesRef.current) {
       setTitle("—");
       return;
     }
     setTitle(`${asset} · 1m`);
+    const symbol = asset!;
 
-    let cancelled = false;
 
     async function seed() {
       try {
-        const rows = await trading.klines(asset, 240);
+        const rows = await trading.klines(symbol, 240);
         let bars = softenFlat(mapRows(rows)).slice(-500);
         if (!bars.length) {
           // Bootstrap from current price if klines are empty
-          const p = await trading.price(asset);
+          const p = await trading.price(symbol);
           const px = Number((p as any).price);
           const now = minuteStart();
           bars = Array.from({ length: 120 }, (_, i) => {
@@ -140,7 +138,7 @@ export default function ChartPanel({ asset }: { asset: string | null }) {
         }
         lastBarRef.current = bars[bars.length - 1] ?? null;
         if (seriesRef.current) {
-          seriesRef.current.setData(bars as unknown as CandlestickData[]);
+          seriesRef.current.setData(bars as any);
           chartRef.current?.timeScale().fitContent();
         }
       } catch {
@@ -151,7 +149,7 @@ export default function ChartPanel({ asset }: { asset: string | null }) {
     async function tick() {
       if (!asset || !seriesRef.current) return;
       try {
-        const p = await trading.price(asset);
+        const p = await trading.price(symbol);
         const px = Number((p as any).price);
         const nowMin = minuteStart();
 
@@ -169,7 +167,7 @@ export default function ChartPanel({ asset }: { asset: string | null }) {
           last = { time: nowMin, open: last.close, high: px, low: px, close: px };
         }
         lastBarRef.current = last;
-        seriesRef.current.update(last as unknown as CandlestickData);
+        seriesRef.current.update(last as any);
       } catch {
         // ignore one-off failures
       }
@@ -185,9 +183,8 @@ export default function ChartPanel({ asset }: { asset: string | null }) {
         window.clearInterval(timerRef.current);
         timerRef.current = null;
       }
-      cancelled = true;
     };
-  }, [asset]);
+  }, [asset, ready]);
 
   return (
     <div className="h-full flex flex-col">
