@@ -135,31 +135,26 @@ app.get('/api/v1/price', async (req, res) => {
   return res.json(out);
 });
 
-/** (b) Quotes: Bid/Ask/Mid derived from mid-price + spread (bips) */
-app.get('/api/v1/quotes', requireAuth, async (req, res) => {
-  const assetsParam = String(req.query.assets || '');
-  const symbols = assetsParam
-    ? assetsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-    : [];
-
-  const spreadBips = Number(req.query.spreadBips || 16); // default 0.16%
-
-  const out: Record<string, { symbol: string; bid: number; ask: number; mid: number; decimals: number }> = {};
-  for (const sym of symbols) {
-    const pe = getPrice(sym);
-    if (!pe) continue;
-    const mid = Number(pe.price) / 10 ** pe.decimal;
-    const half = mid * (spreadBips / 20000); // half spread
-    out[sym] = {
-      symbol: sym,
-      bid: mid - half,
-      ask: mid + half,
-      mid,
-      decimals: pe.decimal
+app.get('/api/v1/quotes', async (req, res) => {
+  const assetsStr = String(req.query.assets || '');
+  const symbols = assetsStr.split(',').map(s => s.trim()).filter(Boolean);
+  const spreadBips = 16; // 0.16%
+  const out: Record<string, { symbol:string, bid:number, ask:number, mid:number, decimals:number }> = {};
+  for (const s of symbols) {
+    const p = await getHumanPrice(s); // { symbol, price, decimals }
+    if (!p) continue;
+    const mid = Number(p.price);
+    const spread = mid * spreadBips / 10_000;
+    out[s] = {
+      symbol: s,
+      bid: Number((mid - spread).toFixed(p.decimals)),
+      ask: Number((mid + spread).toFixed(p.decimals)),
+      mid, decimals: p.decimals,
     };
   }
   res.json({ quotes: out, spreadBips });
 });
+
 
 app.get('/api/v1/klines', async (req, res) => {
   const asset = String(req.query.asset || '');

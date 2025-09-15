@@ -1,63 +1,68 @@
 import { useEffect, useState } from "react";
-import { api, type Asset, type Me } from "./lib/api";
-import SignInForm from "./components/SignInForm";
-import Shell from "./layouts/Shell";
-import TopBar from "./components/TopBar";
-import Instruments from "./components/Instruments";
-import ChartPanel from "./components/ChartPanel";
-import TradePanel from "./components/TradePanel";
+import { Routes, Route, Link, useLocation } from "react-router-dom";
+import { api, trading, type Me } from "./lib/api";
+import Trade from "./pages/Trade";
+import History from "./pages/History";
+import SignIn from "./pages/SignIn";
+
+function TopBar({ me, balance }: { me: Me | null; balance: number | null }) {
+  const app = import.meta.env.VITE_APP_NAME || "Exlite";
+  return (
+    <div className="px-4 h-14 flex items-center justify-between bg-black/20 border-b border-white/10">
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 rounded-xl bg-yellow-400 text-black grid place-items-center font-bold">E</div>
+        <Link to="/" className="font-semibold">{app}</Link>
+        <Link to="/" className="ml-4 text-white/80 hover:text-white">Trade</Link>
+        <Link to="/history" className="ml-3 text-white/80 hover:text-white">History</Link>
+      </div>
+      <div className="flex items-center gap-4">
+        <div className="text-white/80">{balance != null ? `$${balance.toLocaleString()}` : "—"}</div>
+        <div className="text-white/60">{me?.email ?? ""}</div>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
-  const [assets, setAssets] = useState<Asset[]>([]);
-  const [picked, setPicked] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [balance, setBalance] = useState<number | null>(null);
+  const loc = useLocation();
 
+  // session check (also when ?signedIn=1 present after magic link)
   useEffect(() => {
     (async () => {
-      const url = new URL(window.location.href);
-      if (url.searchParams.get("signedIn") === "1") {
-        url.searchParams.delete("signedIn");
-        window.history.replaceState({}, "", url.pathname + url.search);
-      }
       try {
         const m = await api.me();
-        setMe(m);
-        if (m.authenticated) {
-          const { assets } = await api.supportedAssets();
-          setAssets(assets);
-          if (assets[0]) setPicked(assets[0].symbol);
-        }
+        if (m.authenticated) setMe(m);
+        else setMe({ authenticated: false });
       } catch {
         setMe({ authenticated: false });
-      } finally {
-        setLoading(false);
       }
     })();
-  }, []);
+  }, [loc.search]);
 
-  if (loading) {
-    return <div className="h-full grid place-items-center"><div className="animate-pulse text-white/70">Loading…</div></div>;
-  }
+  useEffect(() => {
+    if (!me?.authenticated) return;
+    let stop = false;
+    const loop = async () => {
+      try { const b = await trading.balanceUsd(); setBalance(b.balance); } catch {}
+      if (!stop) setTimeout(loop, 4000);
+    };
+    loop();
+    return () => { stop = true; };
+  }, [me?.authenticated]);
 
-  if (!me?.authenticated) {
-    return (
-      <div className="min-h-full flex items-center justify-center p-6">
-        <div className="w-full max-w-md text-center space-y-4">
-          <h1 className="text-3xl font-semibold">Welcome to Exlite</h1>
-          <p className="text-white/70">Enter your email to get a magic link (dev mode: backend console).</p>
-          <SignInForm onSent={() => {}} />
-        </div>
-      </div>
-    );
-  }
+  if (!me || !("authenticated" in me)) return null;
+  if (!me.authenticated) return <SignIn />;
 
   return (
-    <Shell
-      top={<TopBar email={me.email} tabs={assets.map(a => ({ symbol: a.symbol, active: a.symbol===picked, onClick: () => setPicked(a.symbol) }))} />}
-      left={<Instruments assets={assets} onPick={setPicked} picked={picked ?? undefined} />}
-      center={<ChartPanel asset={picked} />}
-      right={<TradePanel asset={picked} />}
-    />
+    <div className="min-h-screen flex flex-col">
+      <TopBar me={me} balance={balance} />
+      <Routes>
+        <Route path="/" element={<Trade />} />
+        <Route path="/history" element={<History />} />
+        <Route path="*" element={<Trade />} />
+      </Routes>
+    </div>
   );
 }

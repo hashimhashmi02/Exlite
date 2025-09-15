@@ -1,46 +1,49 @@
-import { useEffect, useMemo, useState } from "react";
-import { type OpenOrderDTO, orders, trading } from "../lib/api";
+import { useEffect, useState } from "react";
+import { orders, type OpenOrderDTO, trading } from "../lib/api";
 
-type Row = OpenOrderDTO & { current?: number; entryHuman?: number; pnl?: number };
-
-const usd = (n?: number) => n==null ? "—" :
-  `$${n.toLocaleString(undefined,{maximumFractionDigits:2})}`;
+const usd = (n?: number) =>
+  n == null || !Number.isFinite(n)
+    ? "$0.00"
+    : `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
 export default function OpenOrders() {
-  const [rows,setRows]=useState<Row[]>([]);
-  const [loading,setLoading]=useState(true);
+  const [rows, setRows] = useState<OpenOrderDTO[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
-  async function refresh(){
-    const { orders: list } = await orders.open();
-    const uniq = [...new Set(list.map(o=>o.asset))];
-    const priceMap: Record<string, number> = {};
-    await Promise.all(uniq.map(async s=>{
-      try{ const p=await trading.price(s); priceMap[s]=Number(p.price);}catch{}
-    }));
-    setRows(list.map(o=>{
-      const entryHuman = Number(o.entryPrice)/10**o.assetDecimals;
-      const current = priceMap[o.asset];
-      let pnl: number|undefined;
-      if (current!=null){
-        const expo = (Number(o.marginCents)/100)*o.leverage;
-        const ret = (current - entryHuman)/entryHuman;
-        pnl = (o.side==='LONG'?ret:-ret)*expo;
-      }
-      return {...o, entryHuman, current, pnl};
-    }));
-    setLoading(false);
+  async function load() {
+    try {
+      const r = await orders.open();
+      setRows(r.orders || []);
+    } catch {}
   }
 
-  useEffect(()=>{ let t:any; const loop=async()=>{try{await refresh();}catch{} t=setTimeout(loop,3000)}; loop(); return ()=>clearTimeout(t); },[]);
-  const total = useMemo(()=> rows.reduce((s,r)=>s+(r.pnl??0),0),[rows]);
+  // poll every 2s
+  useEffect(() => {
+    let stop = false;
+    const loop = async () => {
+      await load();
+      if (!stop) setTimeout(loop, 2000);
+    };
+    loop();
+    return () => {
+      stop = true;
+    };
+  }, []);
 
-  async function closeOne(id:string){ try{ await trading.close(id); await refresh(); } catch(e:any){ alert(e?.message || 'Close failed'); } }
+  async function closeOrder(id: string) {
+    setBusyId(id);
+    try {
+      await trading.close(id);
+      await load();
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
-    <div className="mt-4">
+    <div className="mt-6">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm uppercase tracking-wider text-white/60">Open</h3>
-        <div className={`${total>=0?'text-green-400':'text-red-400'} text-sm`}>{usd(total)}</div>
       </div>
       <div className="rounded-xl border border-white/10 overflow-hidden">
         <table className="w-full text-sm">
@@ -49,27 +52,42 @@ export default function OpenOrders() {
               <th className="px-3 py-2 text-left">Symbol</th>
               <th className="px-3 py-2 text-left">Side</th>
               <th className="px-3 py-2 text-right">Margin</th>
+              <th className="px-3 py-2 text-right">Leverage</th>
               <th className="px-3 py-2 text-right">Entry</th>
-              <th className="px-3 py-2 text-right">Current</th>
-              <th className="px-3 py-2 text-right">P/L</th>
-              <th className="px-3 py-2"></th>
+              <th className="px-3 py-2 text-right">Action</th>
             </tr>
           </thead>
           <tbody>
-            {rows.length===0 && !loading && (<tr><td colSpan={7} className="px-3 py-4 text-white/60">No open positions.</td></tr>)}
-            {rows.map(r=>(
-              <tr key={r.orderId} className="border-t border-white/10">
-                <td className="px-3 py-2 font-medium">{r.asset}</td>
-                <td className="px-3 py-2">{r.side}</td>
-                <td className="px-3 py-2 text-right">{usd(Number(r.marginCents)/100)}</td>
-                <td className="px-3 py-2 text-right">{r.entryHuman?.toLocaleString()}</td>
-                <td className="px-3 py-2 text-right">{r.current?.toLocaleString() ?? '—'}</td>
-                <td className={`px-3 py-2 text-right ${ (r.pnl??0)>=0?'text-green-400':'text-red-400'}`}>{usd(r.pnl)}</td>
-                <td className="px-3 py-2 text-right">
-                  <button onClick={()=>closeOne(r.orderId)} className="rounded-lg bg-white/10 hover:bg-white/15 px-3 py-1.5">Close</button>
+            {rows.length === 0 && (
+              <tr>
+                <td className="px-3 py-4 text-white/60" colSpan={6}>
+                  No open orders.
                 </td>
               </tr>
-            ))}
+            )}
+            {rows.map((r) => {
+              const dec = Number(r.assetDecimals ?? 2);
+              const entry = r.entryPrice ? Number(r.entryPrice) / 10 ** dec : undefined;
+              const margin = Number(r.marginCents ?? 0) / 100;
+              return (
+                <tr key={r.orderId} className="border-t border-white/10">
+                  <td className="px-3 py-2">{r.asset}</td>
+                  <td className="px-3 py-2">{r.side}</td>
+                  <td className="px-3 py-2 text-right">{usd(margin)}</td>
+                  <td className="px-3 py-2 text-right">{r.leverage}x</td>
+                  <td className="px-3 py-2 text-right">{entry?.toLocaleString() ?? "—"}</td>
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      className="px-3 py-1 rounded-lg bg-white text-black disabled:opacity-60"
+                      disabled={busyId === r.orderId}
+                      onClick={() => closeOrder(r.orderId)}
+                    >
+                      {busyId === r.orderId ? "Closing…" : "Close"}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
