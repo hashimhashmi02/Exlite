@@ -1,27 +1,17 @@
-import { useEffect, useState } from "react";
-import Shell from "../layouts/Shell";
-import { api, type Asset } from "../lib/api";
+import { useState } from "react";
 import Instruments from "../components/Instruments";
 import ChartPanel from "../components/ChartPanel";
 import TradePanel from "../components/TradePanel";
+import type { AssetSym } from "../lib/symbols";
 
 export default function Trade() {
-  const [assets, setAssets] = useState<Asset[]>([]);
-  const [picked, setPicked] = useState<string | null>(null);
-
-  useEffect(() => {
-    (async () => {
-      const a = await api.supportedAssets();
-      setAssets(a.assets);
-      if (!picked && a.assets.length) setPicked(a.assets[0].symbol);
-    })();
-  }, []);
+  const [picked, setPicked] = useState<AssetSym>("BTC");
 
   return (
-    <Shell
-      left={<Instruments assets={assets} onPick={setPicked} picked={picked ?? undefined} />}
-      center={<ChartPanel asset={picked} />}
-      right={<TradePanel asset={picked} />}
-    />
+    <div className="grid grid-cols-[360px_1fr_420px] gap-6 h-full">
+      <Instruments picked={picked} onPick={setPicked} />
+      <ChartPanel asset={picked} />
+      <TradePanel asset={picked} />
+    </div>
   );
 }

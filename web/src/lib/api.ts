@@ -2,7 +2,6 @@
 export type Me = { authenticated: boolean; email?: string };
 export type Asset = { symbol: string; name: string; imageUrl: string };
 export type Quote = { symbol: string; bid: number; ask: number; mid: number; decimals: number };
-
 export type UsdBalance = { balance: number };
 export type AllBalances = Record<string, { balance: number; decimals: number }>;
 export type PriceResp = { symbol: string; price: string; decimals: number; raw: string };
@@ -115,3 +114,10 @@ export const trading = {
       { credentials: "include" }
     ).then((r) => json<Kline[]>(r)),
 };
+export function openQuoteSSE(onMsg: (payload: any) => void) {
+  const es = new EventSource(`${BASE}/api/v1/stream/quotes`, { withCredentials: false });
+  es.onmessage = (ev) => {
+    try { onMsg(JSON.parse(ev.data)); } catch {}
+  };
+  return () => es.close();
+}

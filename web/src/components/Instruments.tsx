@@ -1,69 +1,109 @@
 import { useEffect, useMemo, useState } from "react";
-import { type Asset, quotes } from "../lib/api";
+import { api, quotes } from "../lib/api";
+import { type AssetSym, DEFAULT_ASSETS } from "../lib/symbols";
 
-type Row = Asset & { bid?: number; ask?: number };
+type AssetRow = { symbol: AssetSym; name: string; imageUrl?: string };
+type Props = {
+  picked: AssetSym;
+  onPick: (s: AssetSym) => void;
+};
 
-export default function Instruments({ assets, onPick, picked }:{
-  assets: Asset[]; onPick(symbol:string):void; picked?: string;
-}) {
-  const [rows, setRows] = useState<Row[]>(assets);
-  const [q, setQ] = useState('');
+export default function Instruments({ picked, onPick }: Props) {
+  const [assets, setAssets] = useState<AssetRow[]>([]);
+  const [bbo, setBbo] = useState<Record<string, { bid: number; ask: number }>>({});
+  const [qErr, setQErr] = useState<string | null>(null);
 
-  useEffect(()=> setRows(assets), [assets]);
+  // load assets once
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { assets } = await api.supportedAssets();
+        const cleaned = assets
+          .map(a => a.symbol.toUpperCase())
+          .filter(s => s === "BTC" || s === "ETH" || s === "SOL") as AssetSym[];
 
-  useEffect(()=>{
-    let stop=false;
-    const loop = async ()=>{
-      if (!assets.length) return;
-      try{
-        const { quotes: book } = await quotes.get(assets.map(a=>a.symbol));
-        setRows(prev => prev.map(r => ({
-          ...r, bid: book[r.symbol]?.bid, ask: book[r.symbol]?.ask
-        })));
-      }catch{}
-      if (!stop) setTimeout(loop, 2000);
+        const rows: AssetRow[] =
+          cleaned.length
+            ? cleaned.map(s => ({ symbol: s, name: s === "BTC" ? "Bitcoin" : s === "ETH" ? "Ethereum" : "Solana" }))
+            : DEFAULT_ASSETS;
+
+        if (!cancelled) setAssets(rows);
+      } catch (e) {
+        // fallback on failure
+        if (!cancelled) setAssets(DEFAULT_ASSETS);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // poll quotes every 2s for whatever symbols we have
+  const symbols = useMemo(() => assets.map(a => a.symbol), [assets]);
+  useEffect(() => {
+    if (!symbols.length) return;
+    let timer: any;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const { quotes: q } = await quotes.get(symbols);
+        if (!cancelled) {
+          const next: Record<string, { bid: number; ask: number }> = {};
+          for (const [sym, v] of Object.entries(q)) next[sym] = { bid: v.bid, ask: v.ask };
+          setBbo(next);
+          setQErr(null);
+        }
+      } catch (err: any) {
+        if (!cancelled) setQErr(err?.message ?? "quotes error");
+      }
     };
-    loop();
-    return ()=>{ stop=true; };
-  },[assets]);
+    poll();
+    timer = setInterval(poll, 2000);
 
-  const filtered = useMemo(()=>{
-    const s=q.toLowerCase();
-    return rows.filter(r => (r.symbol + r.name).toLowerCase().includes(s));
-  },[rows,q]);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [symbols]);
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="px-3 py-2 border-b border-white/10 text-sm uppercase tracking-wider text-white/60">
-        Instruments
-      </div>
-      <div className="p-3">
-        <input value={q} onChange={e=>setQ(e.target.value)}
-          placeholder="Search"
-          className="w-full rounded-lg bg-white text-black px-3 py-2 outline-none placeholder:text-black/60" />
+    <div className="rounded-2xl bg-[#0f1620] border border-white/5 p-4">
+      <h2 className="text-xl font-semibold mb-3">INSTRUMENTS</h2>
+
+      <input
+        placeholder="Search"
+        className="w-full mb-4 px-4 py-3 rounded-xl bg-white/5 outline-none focus:ring-2 ring-white/10"
+      />
+
+      <div className="grid grid-cols-3 text-white/60 text-sm px-2 pb-2">
+        <div>SYMBOL</div><div className="text-right">BID</div><div className="text-right">ASK</div>
       </div>
 
-      <div className="px-3 pb-2 text-[11px] uppercase text-white/40 grid grid-cols-[1fr,110px,110px] gap-2">
-        <div>Symbol</div><div className="text-right">Bid</div><div className="text-right">Ask</div>
-      </div>
+      <div className="space-y-2">
+        {assets.map((a) => {
+          const q = bbo[a.symbol] || { bid: 0, ask: 0 };
+          const isPicked = picked === a.symbol;
+          return (
+            <button
+              key={a.symbol}
+              onClick={() => onPick(a.symbol)}
+              className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl border
+                ${isPicked ? "border-yellow-400/40 bg-yellow-400/5" : "border-white/5 hover:bg-white/5"}`}
+            >
+              <div className="flex-1 font-medium">{a.symbol}</div>
+              <div className="w-24 text-right tabular-nums">{q.bid ? q.bid.toLocaleString() : "—"}</div>
+              <div className="w-24 text-right tabular-nums">{q.ask ? q.ask.toLocaleString() : "—"}</div>
+            </button>
+          );
+        })}
 
-      <div className="flex-1 overflow-auto px-2 pb-3 space-y-2">
-        {filtered.map(a=>(
-          <button key={a.symbol} onClick={()=>onPick(a.symbol)}
-            className={`w-full grid grid-cols-[1fr,110px,110px] items-center gap-2 px-3 py-2 rounded-xl border transition
-              ${picked===a.symbol?'bg-white text-black border-transparent':'border-white/10 hover:bg-white/10'}`}>
-            <div className="flex items-center gap-2">
-              <img src={a.imageUrl} className="w-5 h-5 rounded-full" />
-              <div className="text-sm font-medium">{a.symbol}</div>
-            </div>
-            <div className={`${picked===a.symbol?'text-black/70':'text-white/80'} text-right text-sm`}>
-              {a.bid!=null ? a.bid.toLocaleString() : '—'}
-            </div>
-            <div className={`${picked===a.symbol?'text-black/70':'text-white/80'} text-right text-sm`}>
-              {a.ask!=null ? a.ask.toLocaleString() : '—'}
-            </div>
-          </button>
-        ))}
+        {!assets.length && (
+          <div className="text-white/50 text-sm px-2 py-6 text-center">
+            Loading instruments…
+          </div>
+        )}
+        {qErr && (
+          <div className="text-red-400/80 text-xs px-2 py-2">
+            {qErr}
+          </div>
+        )}
       </div>
     </div>
   );

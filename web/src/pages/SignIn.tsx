@@ -33,7 +33,7 @@ export default function SignIn() {
           {loading ? "Sending…" : "Send magic link"}
         </button>
         {msg && <div className="mt-3 text-red-400">{msg}</div>}
-        <p className="mt-6 text-sm text-white/40">Dev: backend console me preview URL (Ethereal) aa sakta hai.</p>
+        <p className="mt-6 text-sm text-white/40">⭐</p>
       </div>
     </div>
   );

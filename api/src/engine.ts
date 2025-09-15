@@ -1,272 +1,233 @@
-import { prisma } from './db.js';
-import { randomUUID } from 'crypto';
-import { toScaledBigInt, fromScaledBigInt } from './utils/decimal.js';
-import { recordPrice } from './candles.js';
 import { redisSub } from './redis.js';
-import { scheduleSnapshotSave } from './snapshot.js';
-
-
-export type OrderSide = 'LONG' | 'SHORT';
-
-type PriceEntry = { price: bigint; decimal: number };
-type PricesMap = Record<string, PriceEntry>;
-type Bal = Record<string, bigint>;
+type Side = 'LONG' | 'SHORT';
 
 type OpenOrder = {
   orderId: string;
   email: string;
   asset: string;
-  side: OrderSide;
-  margin: bigint;       
+  side: Side;
+  marginCents: bigint;
   leverage: number;
-  entryPrice: bigint;    
+  entryPrice: number;
   assetDecimals: number;
+  openedAt: number; // ms
 };
 
-export type EngineState = {
-  prices: Record<string, { price: string; decimal: number }>;
-  balances: Record<string, { total: string; locked: string }>;
-  openOrders: Record<string, {
-    orderId: string;
-    email: string;
-    asset: string;
-    side: OrderSide;
-    margin: string;
-    leverage: number;
-    entryPrice: string;
-    assetDecimals: number;
-  }>;
+export type Quote = {
+  symbol: string;
+  bid: number;
+  ask: number;
+  mid: number;
+  decimals: number;
 };
 
+type Candle = [tsMs: number, open: number, high: number, low: number, close: number, volume: number];
 
-const PRICES: PricesMap = {};
-const USD_BALANCE: Bal = {};
-const USD_LOCKED: Bal = {};
-const OPEN_ORDERS: Record<string, OpenOrder> = {};
-const USD_DECIMALS = 2;
+const SPREAD_BIPS = 20;
+const MAX_CANDLES = 5000;
 
-export async function initPricesFromDB() {
-  const assets = await prisma.asset.findMany();
-  for (const a of assets) {
-    if (a.symbol === 'BTC') {
-      PRICES[a.symbol] = { price: BigInt(60000 * 10 ** a.decimals), decimal: a.decimals };
-    } else if (a.symbol === 'ETH') {
-      PRICES[a.symbol] = { price: BigInt(2500 * 10 ** a.decimals), decimal: a.decimals };
-    } else if (a.symbol === 'SOL') {
-      PRICES[a.symbol] = { price: BigInt(150 * 10 ** a.decimals), decimal: a.decimals };
-    } else {
-      PRICES[a.symbol] = { price: BigInt(100 * 10 ** a.decimals), decimal: a.decimals };
-    }
+const priceStore = new Map<string, { price: number; decimals: number }>();
+const openOrdersByEmail = new Map<string, OpenOrder[]>();
+const candlesBySymbol = new Map<string, Candle[]>();
+
+const bucket = (ms: number) => Math.floor(ms / 60_000) * 60_000;
+
+function noteTick(symbol: string, price: number, tsMs = Date.now()) {
+  let arr = candlesBySymbol.get(symbol);
+  if (!arr) {
+    arr = [];
+    candlesBySymbol.set(symbol, arr);
+  }
+  const b = bucket(tsMs);
+  const last = arr[arr.length - 1];
+
+  if (!last || last[0] !== b) {
+    arr.push([b, price, price, price, price, 0]);
+    if (arr.length > MAX_CANDLES) arr.shift();
+  } else {
+    if (price > last[2]) last[2] = price;
+    if (price < last[3]) last[3] = price; 
+    last[4] = price;                      
   }
 }
 
-export function setPrice(symbol: string, price: bigint, decimal: number) {
-  PRICES[symbol] = { price, decimal };
-}
-export function getPrice(symbol: string): PriceEntry | undefined {
-  return PRICES[symbol];
-}
+function seedCandlesIfMissing(symbol: string, price: number, count = 120) {
+  let arr = candlesBySymbol.get(symbol);
+  if (arr && arr.length) return;
 
-
-export async function setHumanPrice(symbol: string, price: number | string) {
-  const asset = await prisma.asset.findUnique({ where: { symbol } });
-  if (!asset) throw new Error('Unsupported asset');
-  const scaled = toScaledBigInt(price, asset.decimals);
-
-  setPrice(symbol, scaled, asset.decimals);
-  recordPrice(symbol, Number(price));
-  scheduleSnapshotSave(); 
-}
-
-export async function getHumanPrice(symbol: string) {
-  const pe = getPrice(symbol);
-  if (!pe) return null;
-  return { symbol, price: fromScaledBigInt(pe.price, pe.decimal), decimals: pe.decimal, raw: pe.price.toString() };
-}
-
-
-export function ensureUsdBalance(email: string) {
-  if (!(email in USD_BALANCE)) USD_BALANCE[email] = BigInt(1_000_000); // $10,000
-  if (!(email in USD_LOCKED)) USD_LOCKED[email] = 0n;
-}
-export function getUsdBalance(email: string) {
-  ensureUsdBalance(email);
-  const free = USD_BALANCE[email] - USD_LOCKED[email];
-  return { free, locked: USD_LOCKED[email], total: USD_BALANCE[email] };
-}
-
-
-export async function openTrade(params: {
-  email: string,
-  asset: string,
-  side: OrderSide,
-  marginCents: bigint,
-  leverage: number,
-  slippageBips: number
-}): Promise<{ orderId: string }> {
-  ensureUsdBalance(params.email);
-
-  if (params.marginCents <= 0n) throw new Error('Margin must be > 0');
-  if (USD_BALANCE[params.email] - USD_LOCKED[params.email] < params.marginCents) {
-    throw new Error('Insufficient free USD balance');
+  const now = Date.now();
+  arr = [];
+  const pad = Math.max(0.01, price * 0.00001);
+  for (let i = count - 1; i >= 0; i--) {
+    const ts = bucket(now - i * 60_000);
+    arr.push([ts, price, price + pad, price - pad, price, 0]);
   }
+  candlesBySymbol.set(symbol, arr);
+}
 
-  const asset = await prisma.asset.findUnique({ where: { symbol: params.asset } });
-  if (!asset) throw new Error('Unsupported asset');
+/** Make fully flat bars visible */
+function widenFlat(c: Candle): Candle {
+  const [t, o, h, l, cl, v] = c;
+  if (h === l) {
+    const pad = Math.max(0.01, Math.abs(h) * 0.00001);
+    const nh = h + pad;
+    const nl = l - pad;
+    const ncl = cl === o ? (cl + (Math.random() < 0.5 ? -pad * 0.4 : pad * 0.4)) : cl;
+    return [t, o, nh, nl, ncl, v];
+  }
+  return c;
+}
+export const assetToBinance = (asset: string) => {
+  const a = asset.toUpperCase();
+  if (a === 'BTC') return 'BTCUSDT';
+  if (a === 'ETH') return 'ETHUSDT';
+  if (a === 'SOL') return 'SOLUSDT';
+  return 'BTCUSDT';
+};
 
-  const pe = getPrice(asset.symbol);
-  if (!pe) throw new Error('Price unavailable');
 
 
-  USD_LOCKED[params.email] += params.marginCents;
-
-  const orderId = randomUUID();
-  OPEN_ORDERS[orderId] = {
-    orderId,
-    email: params.email,
-    asset: asset.symbol,
-    side: params.side,
-    margin: params.marginCents,
-    leverage: params.leverage,
-    entryPrice: pe.price,
-    assetDecimals: asset.decimals
+/** Public: GET quotes */
+export function getQuote(symbol: string): Quote | null {
+  const p = priceStore.get(symbol);
+  if (!p) return null;
+  const mid = p.price;
+  const spr = mid * (SPREAD_BIPS / 10_000);
+  return {
+    symbol,
+    bid: +(mid - spr / 2).toFixed(p.decimals),
+    ask: +(mid + spr / 2).toFixed(p.decimals),
+    mid: +mid.toFixed(p.decimals),
+    decimals: p.decimals,
   };
-
-  scheduleSnapshotSave(); 
-  return { orderId };
 }
 
-export async function closeTrade(params: { orderId: string }) {
-  const oo = OPEN_ORDERS[params.orderId];
-  if (!oo) throw new Error('Order not found');
+export function getQuotes(symbols: string[]): { quotes: Record<string, Quote>, spreadBips: number } {
+  const out: Record<string, Quote> = {};
+  for (const s of symbols) {
+    const q = getQuote(s);
+    if (q) out[s] = q;
+  }
+  return { quotes: out, spreadBips: SPREAD_BIPS };
+}
 
-  const pe = getPrice(oo.asset);
-  if (!pe) throw new Error('Price unavailable');
+export async function getHumanPrice(symbol: string): Promise<{ symbol: string; price: string; decimals: number; raw: string } | null> {
+  const p = priceStore.get(symbol);
+  if (!p) return null;
+  const mult = 10 ** p.decimals;
+  return {
+    symbol,
+    price: p.price.toFixed(p.decimals),
+    decimals: p.decimals,
+    raw: Math.round(p.price * mult).toString(),
+  };
+}
 
-  const exposure = oo.margin * BigInt(oo.leverage); 
-  const delta = pe.price - oo.entryPrice;            
-  let pnl = (delta * exposure) / oo.entryPrice;      
-  if (oo.side === 'SHORT') pnl = -pnl;
+export async function setHumanPrice(symbol: string, price: number, decimals = 4) {
+  priceStore.set(symbol, { price, decimals });
+  seedCandlesIfMissing(symbol, price);
+  noteTick(symbol, price);
+}
 
+export function getKlines(symbol: string, limit = 60): Candle[] {
+  const arr = candlesBySymbol.get(symbol) ?? [];
+  const out = arr.slice(-limit).map(widenFlat);
+  return out;
+}
 
-  USD_LOCKED[oo.email] -= oo.margin;
-  USD_BALANCE[oo.email] += oo.margin + pnl;
+/** ---------------- Orders (demo/paper) ---------------- */
+export function getUsdBalance(_email: string) {
+  return { total: 1_000_000 };
+}
+export function listOpenOrdersByEmail(email: string): OpenOrder[] {
+  return openOrdersByEmail.get(email) ?? [];
+}
+export async function openTrade(args: {
+  email: string; asset: string; side: Side;
+  marginCents: bigint; leverage: number; slippageBips: number;
+}) {
+  const p = priceStore.get(args.asset);
+  if (!p) throw new Error('price unavailable');
 
-  const user = await prisma.user.findUnique({ where: { email: oo.email } });
-  const asset = await prisma.asset.findUnique({ where: { symbol: oo.asset } });
-  if (!user || !asset) throw new Error('Invariant failed');
-
-  await prisma.closedOrder.create({
-    data: {
-      id: params.orderId,
-      userId: user.id,
-      assetId: asset.id,
-      side: oo.side,
-      margin: oo.margin,
-      leverage: oo.leverage,
-      entryPrice: oo.entryPrice,
-      exitPrice: pe.price,
-      pnl
+  const id = crypto.randomUUID();
+  const ord: OpenOrder = {
+    orderId: id,
+    email: args.email,
+    asset: args.asset,
+    side: args.side,
+    marginCents: args.marginCents,
+    leverage: args.leverage,
+    entryPrice: p.price,
+    assetDecimals: p.decimals,
+    openedAt: Date.now(),
+  };
+  const arr = openOrdersByEmail.get(args.email) ?? [];
+  arr.push(ord);
+  openOrdersByEmail.set(args.email, arr);
+  return { orderId: id };
+}
+export async function closeTrade(args: { orderId: string }) {
+  for (const [email, arr] of openOrdersByEmail.entries()) {
+    const i = arr.findIndex(o => o.orderId === args.orderId);
+    if (i !== -1) {
+      const [ord] = arr.splice(i, 1);
+      openOrdersByEmail.set(email, arr);
+      const p = priceStore.get(ord.asset);
+      const exit = p ? p.price : ord.entryPrice;
+      const pnl = Math.round((exit - ord.entryPrice) * Number(ord.marginCents) * ord.leverage / 100);
+      return { pnl: BigInt(pnl) };
     }
-  });
-
-  delete OPEN_ORDERS[params.orderId];
-  scheduleSnapshotSave(); 
-  return { pnl };
-}
-export function dumpState(): EngineState {
-  const prices: EngineState['prices'] = {};
-  for (const [sym, p] of Object.entries(PRICES)) {
-    prices[sym] = { price: p.price.toString(), decimal: p.decimal };
   }
-
-  const balances: EngineState['balances'] = {};
-  for (const [email, total] of Object.entries(USD_BALANCE)) {
-    const locked = USD_LOCKED[email] ?? 0n;
-    balances[email] = { total: total.toString(), locked: locked.toString() };
-  }
-
-  const openOrders: EngineState['openOrders'] = {};
-  for (const [id, o] of Object.entries(OPEN_ORDERS)) {
-    openOrders[id] = {
-      orderId: o.orderId,
-      email: o.email,
-      asset: o.asset,
-      side: o.side,
-      margin: o.margin.toString(),
-      leverage: o.leverage,
-      entryPrice: o.entryPrice.toString(),
-      assetDecimals: o.assetDecimals
-    };
-  }
-
-  return { prices, balances, openOrders };
+  throw new Error('order not found');
 }
 
-export function restoreState(state: EngineState) {
-
-  for (const [sym, p] of Object.entries(state.prices || {})) {
-    setPrice(sym, BigInt(p.price), p.decimal);
-  }
-
-  for (const [email, b] of Object.entries(state.balances || {})) {
-    USD_BALANCE[email] = BigInt(b.total);
-    USD_LOCKED[email] = BigInt(b.locked);
-  }
-  for (const [id, o] of Object.entries(state.openOrders || {})) {
-    OPEN_ORDERS[id] = {
-      orderId: o.orderId,
-      email: o.email,
-      asset: o.asset,
-      side: o.side,
-      margin: BigInt(o.margin),
-      leverage: o.leverage,
-      entryPrice: BigInt(o.entryPrice),
-      assetDecimals: o.assetDecimals
-    };
+/** ---------------- Boot ---------------- */
+export async function initPricesFromDB() {
+  if (!priceStore.size) {
+    await setHumanPrice('BTC', 113000, 4);
+    await setHumanPrice('ETH', 4330, 4);
+    await setHumanPrice('SOL', 223, 4);
   }
 }
 
-export function listOpenOrdersByEmail(email: string) {
-  const rows = Object.values(OPEN_ORDERS).filter(o => o.email === email);
-  return rows.map(o => ({
-    orderId: o.orderId,
-    asset: o.asset,
-    side: o.side,
-    marginCents: o.margin.toString(),    
-    leverage: o.leverage,
-    entryPrice: o.entryPrice.toString(),  
-  }));
-}
-
+/** Robust Redis subscriber (accepts multiple shapes; ignores junk) */
 export async function startPriceSubscriber(channel = 'prices') {
-  await redisSub.subscribe(channel);
-  console.log(`📡 Subscribed to Redis channel: ${channel}`);
+  // ioredis style: subscribe then listen on 'message'
+  try {
+    await (redisSub as any).subscribe(channel);
+  } catch (e) {
+    console.error('redis subscribe failed:', e);
+  }
 
-  redisSub.on('message', async (_ch, msg) => {
-    try {
-      const data = JSON.parse(msg);
-      const arr = Array.isArray(data) ? data
-               : Array.isArray(data?.price_updates) ? data.price_updates
-               : [];
+  (redisSub as any).on('message', (ch: string, msg: string) => {
+    if (ch !== channel) return;
+    if (typeof msg !== 'string' || msg.trim() === '') return;
 
-      let touched = false;
+    let data: any;
+    try { data = JSON.parse(msg); } catch { return; }
+    if (!data || typeof data !== 'object') return;
 
-      for (const u of arr) {
-        if (!u?.asset || u?.price == null || u?.decimal == null) continue;
-        const asset = String(u.asset);
-        const price = BigInt(u.price);
-        const dec = Number(u.decimal);
+    // Support: {price_updates:[...]}, {updates:[...]}, {ticks:[...]}, or raw array
+    const arr =
+      Array.isArray(data) ? data :
+      data.price_updates ?? data.updates ?? data.ticks ?? [];
 
-        setPrice(asset, price, dec);
-        const human = Number(price) / 10 ** dec;
-        recordPrice(asset, human);
-        touched = true;
-      }
+    if (!Array.isArray(arr)) return;
 
-      if (touched) scheduleSnapshotSave(); 
-    } catch (e) {
-      console.error('price msg parse error:', e);
+    for (const u of arr) {
+      if (!u || typeof u.asset !== 'string' || u.price === undefined) continue;
+      const symbol = u.asset;
+      const price = Number(u.price);
+      if (!Number.isFinite(price)) continue;
+
+      const decimals =
+        Number.isFinite(Number(u.decimal)) ? Number(u.decimal) :
+        (priceStore.get(symbol)?.decimals ?? 4);
+
+      // store + candles
+      priceStore.set(symbol, { price, decimals });
+      seedCandlesIfMissing(symbol, price);
+      noteTick(symbol, price);
     }
   });
 }

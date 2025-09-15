@@ -1,44 +1,71 @@
-type Candle = { t: number; o: number; h: number; l: number; c: number; v: number };
-const BOOK: Record<string, Candle[]> = {};
-const MAX_STORE = 2000;
+type Bar = {
+  t: number; // bucket ms (start of minute)
+  o: number; h: number; l: number; c: number;
+};
 
-function minuteStart(ts: number = Date.now()) {
-  return Math.floor(ts / 60000) * 60000;
+const HISTORY = new Map<string, Bar[]>();         // symbol -> last N bars (newest last)
+const LIVE = new Map<string, Bar>();              // symbol -> current open bar (minute bucket)
+const MAX_BARS = 1000;                            // keep enough history for UI limits
+
+function minuteBucket(ms: number) {
+  return Math.floor(ms / 60_000) * 60_000;
 }
 
-export function initCandles(seeds: Array<{ symbol: string; price: number }>, seedLen = 120) {
-  for (const s of seeds) {
-    const arr: Candle[] = [];
-    const base = minuteStart();
-    for (let i = seedLen - 1; i >= 0; i--) {
-      const t = base - i * 60000;
-      arr.push({ t, o: s.price, h: s.price, l: s.price, c: s.price, v: 0 });
+export function initCandles(
+  seeds: Array<{ symbol: string; price: number }>,
+  warmupBars = 120
+) {
+  for (const { symbol, price } of seeds) {
+    const now = Date.now();
+    const bucket = minuteBucket(now);
+    const hist: Bar[] = [];
+
+    // warmup with “flat” bars (so UI has something immediately)
+    for (let i = warmupBars; i > 0; i--) {
+      const t = bucket - i * 60_000;
+      hist.push({ t, o: price, h: price, l: price, c: price });
     }
-    BOOK[s.symbol] = arr;
+    HISTORY.set(symbol, hist);
+    LIVE.set(symbol, { t: bucket, o: price, h: price, l: price, c: price });
   }
 }
 
-// record a tick into current 1m candle
-export function recordPrice(symbol: string, price: number) {
-  if (!BOOK[symbol]) BOOK[symbol] = [];
-  const now = minuteStart();
-  const last = BOOK[symbol][BOOK[symbol].length - 1];
+/** Record a tick (human price) and update the current 1m bar */
+export function recordTick(symbol: string, price: number, atMs = Date.now()) {
+  const bucket = minuteBucket(atMs);
 
-  if (!last || last.t !== now) {
-    BOOK[symbol].push({ t: now, o: price, h: price, l: price, c: price, v: 0 });
-  } else {
-    last.c = price;
-    if (price > last.h) last.h = price;
-    if (price < last.l) last.l = price;
+  const cur = LIVE.get(symbol);
+  if (!cur || cur.t !== bucket) {
+    // minute rolled: push previous live bar into history
+    if (cur) {
+      const hist = HISTORY.get(symbol) ?? [];
+      hist.push(cur);
+      if (hist.length > MAX_BARS) hist.splice(0, hist.length - MAX_BARS);
+      HISTORY.set(symbol, hist);
+    }
+    // start new bar
+    LIVE.set(symbol, { t: bucket, o: price, h: price, l: price, c: price });
+    return;
   }
 
-  if (BOOK[symbol].length > MAX_STORE) BOOK[symbol].splice(0, BOOK[symbol].length - MAX_STORE);
+  // update current bar
+  cur.c = price;
+  if (price > cur.h) cur.h = price;
+  if (price < cur.l) cur.l = price;
 }
 
-// GET klines (1m only for now)
-export function getKlines(symbol: string, limit = 100) {
-  const src = BOOK[symbol] || [];
-  const slice = src.slice(Math.max(0, src.length - limit));
-  // standard kline array: [openTime, open, high, low, close, volume]
-  return slice.map(c => [c.t, c.o, c.h, c.l, c.c, c.v]);
+/** Return klines in Binance-style shape: [time_ms, open, high, low, close, volume] */
+export function getKlines(symbol: string, limit = 60): Array<[number, number, number, number, number, number]> {
+  const hist = HISTORY.get(symbol) ?? [];
+  const cur = LIVE.get(symbol);
+
+  // compose list newest last
+  const all = cur ? [...hist, cur] : [...hist];
+
+  // guard: if completely empty, return []
+  if (all.length === 0) return [];
+
+  // take the last <limit> and map
+  const slice = all.slice(-limit);
+  return slice.map(b => [b.t, b.o, b.h, b.l, b.c, 0]);
 }
