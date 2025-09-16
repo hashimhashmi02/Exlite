@@ -1,5 +1,5 @@
-// Types
 export type Me = { authenticated: boolean; email?: string };
+
 export type Asset = { symbol: string; name: string; imageUrl: string };
 export type Quote = { symbol: string; bid: number; ask: number; mid: number; decimals: number };
 export type UsdBalance = { balance: number };
@@ -9,12 +9,12 @@ export type PriceResp = { symbol: string; price: string; decimals: number; raw: 
 export type TradeCreateBody = {
   asset: string;
   type: "long" | "short";
-  margin: number;     
-  leverage: number;  
-  slippage: number;   
+  margin: number;
+  leverage: number;
+  slippage: number;
 };
 export type TradeCreateResp = { orderId: string };
-export type TradeCloseResp = { orderId: string; pnl: string }; 
+export type TradeCloseResp = { orderId: string; pnl: string };
 
 export type OpenOrderDTO = {
   orderId: string;
@@ -22,14 +22,13 @@ export type OpenOrderDTO = {
   side: "LONG" | "SHORT";
   marginCents: string;
   leverage: number;
-  entryPrice?: string;       
+  entryPrice?: string;
   assetDecimals: number;
 };
 
-export type Kline = [number, number, number, number, number, number]; 
+export type Kline = [number, number, number, number, number, number];
 
 const BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
-
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -42,17 +41,31 @@ async function json<T>(res: Response): Promise<T> {
   }
   return (res.json() as unknown) as T;
 }
+
 export const api = {
+  /** who am i */
   me: (): Promise<Me> =>
     fetch(`${BASE}/api/v1/me`, { credentials: "include" }).then((r) => json<Me>(r)),
 
-  signin: (email: string): Promise<{ ok: true }> =>
+  /** send magic link (dev returns magicUrl) */
+  signin: (
+    email: string
+  ): Promise<{ ok: true; magicUrl?: string; email?: string }> =>
     fetch(`${BASE}/api/v1/signin`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify({ email }),
-    }).then((r) => json<{ ok: true }>(r)),
+    }).then((r) => json(r)),
+
+  /** SPA exchange – posts token, backend sets cookie */
+  exchangeMagic: (token: string): Promise<{ ok: true; email: string }> =>
+    fetch(`${BASE}/api/v1/magic/exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ token }),
+    }).then((r) => json(r)),
 
   supportedAssets: (): Promise<{ assets: Asset[] }> =>
     fetch(`${BASE}/api/v1/supportedAssets`, { credentials: "include" })
@@ -76,7 +89,6 @@ export const orders = {
     fetch(`${BASE}/api/v1/closedOrders`, { credentials: "include" })
       .then((r) => json<{ orders: any[] }>(r)),
 };
-
 
 export const trading = {
   price: (asset: string): Promise<PriceResp> =>
@@ -114,8 +126,9 @@ export const trading = {
       { credentials: "include" }
     ).then((r) => json<Kline[]>(r)),
 };
-export function openQuoteSSE(onMsg: (payload: any) => void) {
-  const es = new EventSource(`${BASE}/api/v1/stream/quotes`, { withCredentials: false });
+
+export function openQuoteSSE(onMsg: (p: any) => void) {
+  const es = new EventSource(`${BASE}/api/v1/stream/quotes`, { withCredentials: true });
   es.onmessage = (ev) => {
     try { onMsg(JSON.parse(ev.data)); } catch {}
   };

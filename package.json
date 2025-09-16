@@ -5,12 +5,10 @@
   "engines": {
     "node": ">=20"
   },
-  "scripts": {
-    "dev": "npm --prefix api run dev",
-    "build": "npm --prefix api run build",
-    "start": "npm --prefix api run start",
-    "typecheck": "npm --prefix api run typecheck",
-    "postinstall": "npm --prefix api install"
+   "scripts": {
+    "bootstrap": "npm --prefix api i && npm --prefix web i",
+    "dev:api": "npm --prefix api run dev",
+    "dev:web": "npm --prefix web run dev"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19"

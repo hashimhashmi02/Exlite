@@ -2,3 +2,30 @@ node_modules
 dist
 .env
 .env.example
+# root
+.DS_Store
+dist
+build
+*.log
+.env
+.env.*.local
+*.local
+
+# node
+node_modules/
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+
+# mono
+/api/node_modules/
+/web/node_modules/
+/api/dist/
+/web/dist/
+/api/.env
+/web/.env
+
+# misc
+coverage/
+.vscode/
+.eslintcache

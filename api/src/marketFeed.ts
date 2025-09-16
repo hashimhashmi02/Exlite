@@ -1,191 +1,120 @@
-import WebSocket from 'ws';
+// api/src/marketFeed.ts
+import WebSocket from "ws";
 
-export type Asset = 'BTC' | 'ETH' | 'SOL';
-
+export type Sym = "BTC" | "ETH" | "SOL";
 type Quote = { bid: number; ask: number; mid: number; decimals: number };
-type Candle = {
-  t: number; 
-  o: number;
-  h: number;
-  l: number;
-  c: number;
-  v: number;
+
+const MAP: Record<Sym, string> = {
+  BTC: "btcusdt",
+  ETH: "ethusdt",
+  SOL: "solusdt",
 };
 
-const BINANCE = 'wss://stream.binance.com:9443/stream';
-const mapToBinance: Record<Asset, string> = {
-  BTC: 'btcusdt',
-  ETH: 'ethusdt',
-  SOL: 'solusdt',
+const last: Record<Sym, Quote> = {
+  BTC: { bid: 0, ask: 0, mid: 0, decimals: 2 },
+  ETH: { bid: 0, ask: 0, mid: 0, decimals: 2 },
+  SOL: { bid: 0, ask: 0, mid: 0, decimals: 2 },
 };
 
-const quotes: Record<Asset, Quote> = {
-  BTC: { bid: NaN, ask: NaN, mid: NaN, decimals: 2 },
-  ETH: { bid: NaN, ask: NaN, mid: NaN, decimals: 2 },
-  SOL: { bid: NaN, ask: NaN, mid: NaN, decimals: 2 },
-};
-
-const candles: Record<Asset, Candle[]> = { BTC: [], ETH: [], SOL: [] };
-const MAX = 2000;
-
-
-type SSE = { id: number; write: (s: string) => void; end: () => void };
-const sseClients = new Map<number, SSE>();
-let sseId = 1;
-function broadcastQuotes() {
-  const payload = JSON.stringify({ type: 'quotes', quotes });
-  for (const c of sseClients.values()) {
-    try {
-      c.write(`data: ${payload}\n\n`);
-    } catch {}
-  }
-}
-export function registerSse(res: any) {
-  const id = sseId++;
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
-  });
-  res.write('\n');
-  const client: SSE = {
-    id,
-    write: (s) => res.write(s),
-    end: () => res.end(),
-  };
-  sseClients.set(id, client);
-  // push snapshot immediately
-  res.write(`data: ${JSON.stringify({ type: 'quotes', quotes })}\n\n`);
-  reqOnClose(res, () => sseClients.delete(id));
+// lightweight pub/sub for SSE
+const subs = new Set<(payload: { quotes: Record<Sym, Quote> }) => void>();
+function emit() {
+  const payload = { quotes: { ...last } };
+  subs.forEach((fn) => fn(payload));
 }
 
-function reqOnClose(res: any, cb: () => void) {
-  const fn = () => cb();
-  res.on('close', fn);
-  res.on('finish', fn);
+/** Subscribe to quote pushes (for SSE). Returns an unsubscribe. */
+export function onQuote(fn: (payload: { quotes: Record<Sym, Quote> }) => void) {
+  subs.add(fn);
+  return () => subs.delete(fn);
 }
 
-// ---- public getters ----
-export function getQuoteSnapshot(assets: Asset[]) {
-  const out: Record<string, Quote> = {};
-  for (const a of assets) {
-    const q = quotes[a];
-    if (q) out[a] = q;
-  }
-  return out;
-}
-export function getCandles(asset: Asset, limit = 60): Candle[] {
-  const arr = candles[asset] || [];
-  return arr.slice(Math.max(0, arr.length - limit));
+/** Return latest quotes snapshot */
+export function getQuotes() {
+  return last;
 }
 
-// ---- bootstrap the feed ----
-export async function startBinanceFeed(assets: Asset[]) {
-  // build combined stream: kline + bookTicker for each asset
-  const parts: string[] = [];
-  for (const a of assets) {
-    const s = mapToBinance[a];
-    parts.push(`${s}@kline_1m`);
-    parts.push(`${s}@bookTicker`);
-  }
-  const url = `${BINANCE}?streams=${parts.join('/')}`;
-  const ws = new WebSocket(url);
+/** REST candles from Binance; mapped to [openTime, open, high, low, close, volume] */
+export async function getKlines(
+  asset: Sym | string,
+  interval = "1m",
+  limit = 240
+): Promise<[number, string, string, string, string, string][]> {
+  const sym = (String(asset).toUpperCase() as Sym) || "BTC";
+  const pair = MAP[sym].toUpperCase();
+  const url = `https://api.binance.com/api/v3/klines?symbol=${pair}&interval=${interval}&limit=${limit}`;
+  const res = await fetch(url);
+  const raw = (await res.json()) as any[];
+  // [openTime, open, high, low, close, volume, ...]
+  return raw.map((r) => [r[0], r[1], r[2], r[3], r[4], r[5]]);
+}
 
-  ws.on('open', () => {
-    // console.log('[feed] connected');
-  });
+/** (optional no-op) */
+export async function initPricesFromDB() {
+  // keep no-op for compatibility
+}
 
-  ws.on('message', (buf) => {
-    try {
-      const msg = JSON.parse(buf.toString());
-      const stream: string = msg?.stream || '';
-      const data = msg?.data;
+/** Start bookTicker stream. Calls cb(sym, mid, decimals) on updates */
+export async function startPricesSubscriber(
+  cb?: (sym: Sym, price: number, decimals?: number) => void
+) {
+  const streams = Object.values(MAP)
+    .map((p) => `${p}@bookTicker`)
+    .join("/");
+  const URL = `wss://stream.binance.com:9443/stream?streams=${streams}`;
 
-      // bookTicker (bid/ask)
-      if (stream.endsWith('bookTicker') && data?.s) {
-        const a = fromBinanceSymbol(data.s);
-        if (!a) return;
+  let ws: WebSocket | null = null;
+  let killed = false;
+
+  const connect = () => {
+    if (killed) return;
+    ws = new WebSocket(URL);
+
+    ws.on("open", () => {
+      // console.log("Binance WS connected");
+    });
+
+    ws.on("message", (buf) => {
+      try {
+        const msg = JSON.parse(buf.toString());
+        const stream: string = msg.stream; // e.g. "btcusdt@bookTicker"
+        const data = msg.data; // {b: "bid", a: "ask", ...}
+        const pair = stream.split("@")[0]; // "btcusdt"
+        const entry = Object.entries(MAP).find(([, v]) => v === pair);
+        if (!entry) return;
+        const sym = entry[0] as Sym;
+
         const bid = Number(data.b);
         const ask = Number(data.a);
-        if (Number.isFinite(bid) && Number.isFinite(ask)) {
-          const mid = (bid + ask) / 2;
-          quotes[a] = { bid, ask, mid, decimals: 2 };
-          broadcastQuotes();
-        }
-        return;
-      }
+        if (!isFinite(bid) || !isFinite(ask)) return;
 
-      // kline 1m
-      if (stream.includes('@kline_1m') && data?.k) {
-        const k = data.k; // binance kline payload
-        const a = fromBinanceSymbol(data.s);
-        if (!a) return;
+        const mid = (bid + ask) / 2;
+        last[sym] = { bid, ask, mid, decimals: 2 };
 
-        const t = Number(k.t); // open time ms
-        const o = Number(k.o);
-        const h = Number(k.h);
-        const l = Number(k.l);
-        const c = Number(k.c);
-        const v = Number(k.v);
-        const closed = Boolean(k.x);
+        // notify SSE subscribers + engine
+        emit();
+        cb?.(sym, mid, 2);
+      } catch {}
+    });
 
-        if (!Number.isFinite(t) || !Number.isFinite(o)) return;
+    ws.on("close", () => {
+      if (killed) return;
+      setTimeout(connect, 1000);
+    });
 
-        const arr = candles[a];
-        const last = arr[arr.length - 1];
+    ws.on("error", () => {
+      try {
+        ws?.close();
+      } catch {}
+    });
+  };
 
-        if (!last || last.t !== t) {
-          arr.push({ t, o, h, l, c, v });
-          if (arr.length > MAX) arr.splice(0, arr.length - MAX);
-        } else {
-          // update in-flight candle
-          last.o = o;
-          last.h = Math.max(last.h, h);
-          last.l = Math.min(last.l, l);
-          last.c = c;
-          last.v = v;
-        }
-        // when candle closes, the next message will start a new bar
-        return;
-      }
-    } catch {
-      // swallow
-    }
-  });
+  connect();
 
-  ws.on('close', () => {
-    setTimeout(() => startBinanceFeed(assets), 1500);
-  });
-
-  // Preload some history using Binance REST (best-effort)
-  await preloadHistory(assets).catch(() => {});
-}
-
-async function preloadHistory(assets: Asset[]) {
-  // tiny REST preload to avoid empty chart at first paint
-  const fetch = (await import('node-fetch')).default as any;
-  for (const a of assets) {
-    const s = mapToBinance[a].toUpperCase();
-    const url = `https://api.binance.com/api/v3/klines?symbol=${s}&interval=1m&limit=300`;
-    const raw = await fetch(url).then((r: any) => r.json());
-    // each row: [ openTime, open, high, low, close, volume, closeTime, ...]
-    const rows: Candle[] = raw.map((r: any[]) => ({
-      t: Number(r[0]),
-      o: Number(r[1]),
-      h: Number(r[2]),
-      l: Number(r[3]),
-      c: Number(r[4]),
-      v: Number(r[5]),
-    }));
-    candles[a] = rows;
-  }
-}
-
-function fromBinanceSymbol(s: string): Asset | null {
-  const low = s.toLowerCase();
-  if (low === 'btcusdt') return 'BTC';
-  if (low === 'ethusdt') return 'ETH';
-  if (low === 'solusdt') return 'SOL';
-  return null;
+  return () => {
+    killed = true;
+    try {
+      ws?.close();
+    } catch {}
+  };
 }

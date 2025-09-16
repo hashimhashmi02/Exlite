@@ -1,249 +1,324 @@
-import express from 'express';
-import cors from 'cors';
-import cookieParser from 'cookie-parser';
-import { z } from 'zod';
-import { proxyKlines, proxyTicker, streamKlinesSSE } from './market.js';
-import { env, isProd } from './env.js';
-import { prisma } from './db.js';
-import {
-  startBinanceFeed,
-  getQuoteSnapshot,
-  getCandles,
-  registerSse,
-  type Asset as LiveAsset,
-} from './marketFeed.js';
+import express from "express";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+import morgan from "morgan";
 
+import { env } from "./env.js";
+import { requireAuth } from "./middleware.js";
 import {
-  initPricesFromDB,
-  startPriceSubscriber,
-  getHumanPrice,
-  setHumanPrice,
-  getKlines,
-  getUsdBalance,
-  getQuotes,
-  openTrade,
-  closeTrade,
-  listOpenOrdersByEmail
-} from './engine.js';
+  createMagicToken,
+  createSessionToken,
+  verifyMagicToken,
+  verifySessionToken,
+} from "./auth.js";
 
-import { createMagicToken, verifyMagicToken, createSessionToken, verifySessionToken } from './auth.js';
-import { requireAuth, getUserEmail } from './middleware.js';
-import { sendMagicLinkEmail } from './email.js';
-import { redisPub } from './redis.js';
+import * as engine from "./engine.js";
+import * as marketFeed from "./marketFeed.js";
+
+type Sym = engine.AssetSym;
 
 const app = express();
+const PORT = Number(process.env.PORT || 8080);
+
+app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
-app.use(cors({ origin: env.FRONTEND_URL, credentials: true }));
-app.set('json replacer', (_k: any, v: { toString: () => any; }) => (typeof v === 'bigint' ? v.toString() : v));
-app.get('/health', (_req, res) => res.json({ ok: true }));
+app.use(
+  cors({
+    origin: env.FRONTEND_URL,
+    credentials: true,
+  })
+);
 
-app.get('/api/v1/market/klines', proxyKlines);
-app.get('/api/v1/market/ticker', proxyTicker);
-app.get('/api/v1/market/stream', streamKlinesSSE);
+// ---------- utils ----------
+const cents = (n: number) => Math.round(Number(n) * 100);
+const toRawPx = (px: number, decimals: number) =>
+  String(Math.round(Number(px) * 10 ** decimals));
+const getDecimals = (sym: Sym) =>
+  Number(engine.getQuotes()[sym]?.decimals ?? 2);
 
+// ---------- best-effort market feed bootstrap ----------
+(async () => {
+  try {
+    if (typeof (marketFeed as any).initPricesFromDB === "function") {
+      await (marketFeed as any).initPricesFromDB();
+    }
+    const start =
+      (marketFeed as any).startPriceSubscriber ??
+      (marketFeed as any).startPricesSubscriber;
+    if (typeof start === "function") {
+      await start((sym: Sym, price: number) => {
+        try {
+          engine.setQuote(sym, price, 2);
+        } catch {}
+      });
+    }
+  } catch (e) {
+    console.warn("Market feed not started:", (e as Error)?.message || e);
+  }
+})();
 
+// ---------- auth ----------
+const cookieOpts = {
+  httpOnly: true as const,
+  sameSite: "lax" as const,
+  secure: env.NODE_ENV !== "development",
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+};
 
-// live quotes (Bid/Ask/Mid)
-app.get('/api/v1/quotes', (_req, res) => {
-  const q = String(_req.query.assets || '').split(',').filter(Boolean) as LiveAsset[];
-  if (!q.length) return res.json({ quotes: {}, spreadBips: 0 });
-  const snap = getQuoteSnapshot(q);
-  // simple constant spread for UI (optional)
-  res.json({ quotes: snap, spreadBips: 5 });
-});
-
-
-const EmailBody = z.object({ email: z.string().email() });
-
-app.post('/api/v1/signin', async (req, res) => {
-  const parsed = EmailBody.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid email' });
-
-  const { email } = parsed.data;
+app.post("/api/v1/signin", async (req, res) => {
+  const email = String(req.body?.email || "").trim();
+  if (!email || !email.includes("@")) {
+    return res.status(400).json({ ok: false, error: "Invalid email" });
+  }
   const token = createMagicToken(email);
-  const url = `${env.BACKEND_URL}/api/v1/signin/post?token=${encodeURIComponent(token)}`;
 
-  try {
-    await sendMagicLinkEmail(email, url);
-    res.json({ ok: true });
-  } catch (e: any) {
-    console.error('send mail error:', e?.message || e);
-    res.status(500).json({ error: 'mail failed' });
+  // keep the magic URL off the page; log during dev only
+  if (env.NODE_ENV === "development") {
+    console.log(
+      "Magic URL:",
+      `${env.FRONTEND_URL}/magic?token=${encodeURIComponent(token)}`
+    );
   }
-});
-
-app.get('/api/v1/signin/post', async (req, res) => {
-  const token = String(req.query.token || '');
-  if (!token) return res.status(400).send('missing token');
-  try {
-    const { email } = verifyMagicToken(token);
-    await prisma.user.upsert({ where: { email }, update: {}, create: { email } });
-
-    const session = createSessionToken(email);
-    res.cookie('session', session, {
-      httpOnly: true, secure: isProd, sameSite: 'lax', path: '/',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-
-    const target = new URL(env.FRONTEND_URL);
-    target.searchParams.set('signedIn', '1');
-    res.redirect(target.toString());
-  } catch {
-    res.status(400).send('Invalid or expired token');
-  }
-});
-
-app.get('/api/v1/me', (req, res) => {
-  const token = req.cookies?.session as string | undefined;
-  if (!token) return res.status(401).json({ authenticated: false });
-  try {
-    const p = verifySessionToken(token);
-    res.json({ authenticated: true, email: p.email });
-  } catch {
-    res.status(401).json({ authenticated: false });
-  }
-});
-
-/** -------- Market/Quotes -------- */
-app.get('/api/v1/supportedAssets', async (_req, res) => {
-  const rows = await prisma.asset.findMany({ select: { symbol: true, name: true, imageUrl: true } });
-  res.json({ assets: rows });
-});
-
-// Returns bid/ask/mid for a comma-separated list of assets, e.g. BTC,ETH,SOL
-app.get('/api/v1/quotes', async (req, res) => {
-  const assets = String(req.query.assets || '')
-    .split(',')
-    .map(s => s.trim().toUpperCase())
-    .filter(Boolean);
-
-  if (!assets.length) return res.status(400).json({ error: 'assets required' });
-
-  const quotes = getQuotes(assets);
-  // Include a tiny spreadBips helper (0 if we only have mid)
-  const spreadBips = 0;
-  res.json({ quotes, spreadBips });
-});
-
-app.get('/api/v1/price', async (req, res) => {
-  const asset = String(req.query.asset || '') as LiveAsset;
-  if (!asset) return res.status(400).json({ error: 'asset required' });
-  const snap = getQuoteSnapshot([asset]);
-  const q = snap[asset];
-  if (!q || !Number.isFinite(q.mid)) return res.status(404).json({ error: 'price unavailable' });
-  return res.json({ symbol: asset, price: q.mid.toFixed(4), decimals: 4, raw: String(Math.round(q.mid * 10_000)) });
-});
-
-/** Admin helpers */
-app.post('/api/v1/admin/price', requireAuth, async (req, res) => {
-  if (isProd) return res.status(403).json({ error: 'disabled in production' });
-  const { asset, price, decimals } = req.body || {};
-  if (!asset || price === undefined) return res.status(400).json({ error: 'asset, price required' });
-  await setHumanPrice(String(asset), Number(price), Number(decimals ?? 4));
-  const out = await getHumanPrice(String(asset));
-  res.json({ ok: true, ...out });
-});
-
-app.post('/api/v1/admin/redis/publish', requireAuth, async (req, res) => {
-  // Optional: basic validation to avoid null payload
-  const body = req.body;
-  if (!body || typeof body !== 'object' || !Array.isArray((body as any).price_updates)) {
-    return res.status(400).json({ error: 'price_updates array required' });
-  }
-  await redisPub.publish('prices', JSON.stringify(body));
   res.json({ ok: true });
 });
 
+app.get("/api/v1/magic", (req, res) => {
+  const token = String(req.query.token || "");
+  if (!token) return res.status(400).send("Missing token");
 
-
-
-/** -------- Trading -------- */
-const CreateTradeBody = z.object({
-  asset: z.string().min(1),
-  type: z.enum(['long', 'short']),
-  margin: z.number().int().positive(),
-  leverage: z.number().int().min(1).max(100),
-  slippage: z.number().int().min(0).max(10_000)
-});
-
-app.post('/api/v1/trade/create', requireAuth, async (req, res) => {
-  const parsed = CreateTradeBody.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
-
-  const email = getUserEmail(req);
-  const side = parsed.data.type === 'long' ? 'LONG' : 'SHORT';
   try {
-    const out = await openTrade({
-      email,
-      asset: parsed.data.asset,
-      side,
-      marginCents: BigInt(parsed.data.margin),
-      leverage: parsed.data.leverage,
-      slippageBips: parsed.data.slippage
-    });
-    res.json(out);
-  } catch (e: any) {
-    res.status(400).json({ error: e?.message || 'Trade open failed' });
+    const { email } = verifyMagicToken(token);
+    const session = createSessionToken(email);
+    res.cookie("session", session, cookieOpts);
+    return res.redirect(`${env.FRONTEND_URL}/trade`);
+  } catch {
+    return res.status(400).send("Invalid or expired link");
   }
 });
 
-const CloseTradeBody = z.object({ orderId: z.string().min(1) });
-
-app.post('/api/v1/trade/close', requireAuth, async (req, res) => {
-  const parsed = CloseTradeBody.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
+app.post("/api/v1/magic/exchange", (req, res) => {
+  const token = String(req.body?.token || "");
+  if (!token) return res.status(400).json({ ok: false, error: "Missing token" });
 
   try {
-    const out = await closeTrade({ orderId: parsed.data.orderId });
-    return res.json({ orderId: parsed.data.orderId, pnl: String(out.pnl) });
-  } catch (e: any) {
-    return res.status(400).json({ error: e?.message || 'Trade close failed' });
+    const { email } = verifyMagicToken(token);
+    const session = createSessionToken(email);
+    res.cookie("session", session, cookieOpts);
+    return res.json({ ok: true, email });
+  } catch {
+    return res.status(400).json({ ok: false, error: "Invalid token" });
   }
 });
 
-app.get('/api/v1/openOrders', requireAuth, async (req, res) => {
-  const email = (req as any).email || (req as any).user?.email || (req as any).userEmail;
-  if (!email) return res.status(401).json({ error: 'No session' });
+app.post("/api/v1/logout", (req, res) => {
+  res.clearCookie("session", { ...cookieOpts, maxAge: 0 });
+  res.json({ ok: true });
+});
 
-  const raw = listOpenOrdersByEmail(email);
+app.get("/api/v1/me", (req, res) => {
+  const token = req.cookies?.session as string | undefined;
+  if (!token) return res.json({ authenticated: false });
+  try {
+    const { email } = verifySessionToken(token);
+    return res.json({ authenticated: true, email });
+  } catch {
+    return res.json({ authenticated: false });
+  }
+});
 
-  const orders = raw.map(o => ({
-    orderId: String(o.orderId),
-    asset: o.asset,
-    side: o.side,                     
-    marginCents: String(o.marginCents),
+// ---------- market data ----------
+app.get("/api/v1/supportedAssets", requireAuth, (_req, res) => {
+  res.json({
+    assets: [
+      { symbol: "BTC", name: "Bitcoin", imageUrl: "" },
+      { symbol: "ETH", name: "Ethereum", imageUrl: "" },
+      { symbol: "SOL", name: "Solana", imageUrl: "" },
+    ],
+  });
+});
+
+app.get("/api/v1/price", requireAuth, (req, res) => {
+  const asset = String(req.query.asset || "BTC").toUpperCase() as Sym;
+  const price = Number(engine.getQuote(asset));
+  res.json({
+    symbol: asset,
+    price: price.toFixed(4),
+    decimals: 4,
+    raw: Math.round(price * 10_000).toString(),
+  });
+});
+
+app.get("/api/v1/quotes", requireAuth, (_req, res) => {
+  // Try external feed; otherwise synthesize from engine quotes.
+  const mf =
+    typeof (marketFeed as any).getQuotes === "function"
+      ? (marketFeed as any).getQuotes()
+      : null;
+
+  const build = (sym: Sym) => {
+    if (mf?.[sym]) {
+      const q = mf[sym];
+      const mid = Number(q.mid ?? q.price ?? 0);
+      return {
+        symbol: sym,
+        bid: Number(q.bid ?? mid),
+        ask: Number(q.ask ?? mid),
+        mid,
+        decimals: Number(q.decimals ?? 2),
+      };
+    }
+    const p = engine.getQuotes()[sym];
+    const mid = Number(p?.price ?? 0);
+    const d = Number(p?.decimals ?? 2);
+    return { symbol: sym, bid: mid * 0.999, ask: mid * 1.001, mid, decimals: d };
+  };
+
+  res.json({
+    quotes: {
+      BTC: build("BTC"),
+      ETH: build("ETH"),
+      SOL: build("SOL"),
+    },
+    spreadBips: 0,
+  });
+});
+
+app.get("/api/v1/klines", requireAuth, async (req, res) => {
+  try {
+    if (typeof (marketFeed as any).getKlines !== "function") return res.json([]);
+    const asset = String(req.query.asset || "BTC");
+    const interval = String(req.query.interval || "1m");
+    const limit = Number(req.query.limit || 240);
+    const rows = await (marketFeed as any).getKlines(asset, interval, limit);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ---------- balances ----------
+app.get("/api/v1/balance/usd", requireAuth, (req, res) => {
+  const email = (req as any).userEmail as string;
+  const b = engine.getUsdBalance(email);
+  res.json({ balance: Number(b.cash ?? 0) });
+});
+
+// Some UIs call this too; return a simple shape.
+app.get("/api/v1/balance", requireAuth, (req, res) => {
+  const email = (req as any).userEmail as string;
+  const b = engine.getUsdBalance(email);
+  res.json({
+    USD: { balance: Number(b.cash ?? 0), decimals: 2 },
+  });
+});
+
+// ---------- mapping helpers ----------
+type OpenOrderDTO = {
+  orderId: string;
+  asset: string;
+  side: "LONG" | "SHORT";
+  marginCents: string;
+  leverage: number;
+  entryPrice?: string;      // raw, scaled by assetDecimals
+  assetDecimals: number;
+};
+
+const mapOpen = (o: engine.OpenOrder): OpenOrderDTO => {
+  const sym = String(o.symbol).toUpperCase() as Sym;
+  const dec = getDecimals(sym);
+  return {
+    orderId: String((o as any).orderId || o.id),
+    asset: sym,
+    side: o.side,
+    marginCents: String(cents(o.margin)),
     leverage: Number(o.leverage),
-    entryPrice: o.entryPrice != null ? String(o.entryPrice) : undefined,
-    assetDecimals: Number(o.assetDecimals),
-  }));
+    entryPrice: toRawPx(o.entry, dec),
+    assetDecimals: dec,
+  };
+};
 
-  res.json({ orders });
+const mapClosed = (o: engine.ClosedOrder) => {
+  const sym = String(o.symbol).toUpperCase() as Sym;
+  const dec = getDecimals(sym);
+  return {
+    orderId: String((o as any).orderId || o.id),
+    asset: sym,
+    side: o.side,
+    marginCents: String(cents(o.margin)),
+    leverage: Number(o.leverage),
+    entryPrice: toRawPx(o.entry, dec),
+    exitPrice: toRawPx(o.exit, dec),
+    pnlCents: String(cents(o.pnl)),
+    assetDecimals: dec,
+    closedAt: o.closedAt,
+  };
+};
+
+// ---------- orders ----------
+app.get("/api/v1/openOrders", requireAuth, (req, res) => {
+  const email = (req as any).userEmail as string;
+  const raw = engine.listOpenOrders(email) || [];
+  res.json({ orders: raw.map(mapOpen) });
 });
 
-app.get('/api/v1/balance/usd', requireAuth, (req, res) => {
-  const email = getUserEmail(req);
-  res.json({ balance: Number(getUsdBalance(email).total) });
+app.get("/api/v1/closedOrders", requireAuth, (req, res) => {
+  const email = (req as any).userEmail as string;
+  const raw = engine.listClosedOrders(email) || [];
+  res.json({ orders: raw.map(mapClosed) });
 });
 
-app.get('/api/v1/klines', async (req, res) => {
-  const asset = String(req.query.asset || '') as LiveAsset;
-  const interval = String(req.query.interval || '1m');
-  const limit = Number(req.query.limit || 60);
-  if (!asset) return res.status(400).json({ error: 'asset required' });
-  if (interval !== '1m') return res.status(400).json({ error: 'only 1m supported for now' });
-  const rows = getCandles(asset, Math.min(Math.max(1, limit), 2000));
-  if (!rows.length) return res.status(404).json({ error: 'no candles' });
-  const out = rows.map((r) => [r.t, r.o, r.h, r.l, r.c, r.v]);
-  res.json(out);
+app.post("/api/v1/trade/create", requireAuth, (req, res) => {
+  try {
+    const email = (req as any).userEmail as string;
+    const { asset, type, margin, leverage } = req.body || {};
+    const symbol = String(asset || "BTC").toUpperCase() as Sym;
+    const side = String(type || "long").toUpperCase() === "SHORT" ? "SHORT" : "LONG";
+
+    const order = engine.openTrade(email, {
+      symbol,
+      side,
+      margin: Number(margin),
+      leverage: Number(leverage || 1),
+    });
+
+    res.json({ orderId: String(order.id) });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
 });
 
-await initPricesFromDB();
-await startPriceSubscriber('prices');
+app.post("/api/v1/trade/close", requireAuth, (req, res) => {
+  try {
+    const email = (req as any).userEmail as string;
+    const orderId = String(req.body?.orderId ?? req.body?.id ?? "").trim();
+    if (!orderId) return res.status(400).json({ error: "orderId required" });
 
-await startBinanceFeed(['BTC','ETH','SOL']);
+    const closed = engine.closeTrade(email, orderId);
+    res.json({
+      orderId: String(closed.id),
+      pnl: String(closed.pnl ?? 0),
+    });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
 
+// legacy alias
+app.post("/api/v1/closeTrade", requireAuth, (req, res) => {
+  try {
+    const email = (req as any).userEmail as string;
+    const orderId = String(req.body?.orderId ?? req.body?.id ?? "").trim();
+    if (!orderId) return res.status(400).json({ ok: false, error: "orderId required" });
 
-app.listen(env.PORT, () => {
-  console.log(`🚀 API listening on http://localhost:${env.PORT}`);
+    const closed = engine.closeTrade(email, orderId);
+    res.json({ ok: true, orderId: String(closed.id), pnl: String(closed.pnl ?? 0) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// ---------- start ----------
+app.listen(PORT, () => {
+  console.log(`🚀 API listening on http://localhost:${PORT}`);
 });

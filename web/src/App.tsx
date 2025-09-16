@@ -4,6 +4,7 @@ import { api, trading, type Me } from "./lib/api";
 import Trade from "./pages/Trade";
 import History from "./pages/History";
 import SignIn from "./pages/SignIn";
+import Magic from "./pages/Magic";
 
 function TopBar({ me, balance }: { me: Me | null; balance: number | null }) {
   const app = import.meta.env.VITE_APP_NAME || "Exlite";
@@ -23,46 +24,77 @@ function TopBar({ me, balance }: { me: Me | null; balance: number | null }) {
   );
 }
 
-export default function App() {
-  const [me, setMe] = useState<Me | null>(null);
+function AuthedShell({ me }: { me: Me }) {
   const [balance, setBalance] = useState<number | null>(null);
-  const loc = useLocation();
-
-  // session check (also when ?signedIn=1 present after magic link)
-  useEffect(() => {
-    (async () => {
-      try {
-        const m = await api.me();
-        if (m.authenticated) setMe(m);
-        else setMe({ authenticated: false });
-      } catch {
-        setMe({ authenticated: false });
-      }
-    })();
-  }, [loc.search]);
 
   useEffect(() => {
-    if (!me?.authenticated) return;
     let stop = false;
     const loop = async () => {
-      try { const b = await trading.balanceUsd(); setBalance(b.balance); } catch {}
+      try {
+        const b = await trading.balanceUsd();
+        setBalance(b.balance);
+      } catch {}
       if (!stop) setTimeout(loop, 4000);
     };
     loop();
     return () => { stop = true; };
-  }, [me?.authenticated]);
-
-  if (!me || !("authenticated" in me)) return null;
-  if (!me.authenticated) return <SignIn />;
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col">
       <TopBar me={me} balance={balance} />
       <Routes>
         <Route path="/" element={<Trade />} />
+        <Route path="/trade" element={<Trade />} />
         <Route path="/history" element={<History />} />
         <Route path="*" element={<Trade />} />
       </Routes>
     </div>
   );
+}
+
+export default function App() {
+  const [me, setMe] = useState<Me | null>(null);
+  const [auth, setAuth] = useState<"loading" | "authed" | "anon">("loading");
+  const loc = useLocation();
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const m = await api.me();
+        if (!mounted) return;
+        if (m?.authenticated) {
+          setMe(m);
+          setAuth("authed");
+        } else {
+          setMe({ authenticated: false });
+          setAuth("anon");
+        }
+      } catch {
+        if (!mounted) return;
+        setMe({ authenticated: false });
+        setAuth("anon");
+      }
+    })();
+    return () => { mounted = false; };
+  }, [loc.key]); // re-check on navigation
+
+  // Always allow the token exchange page
+  if (loc.pathname === "/magic") return <Magic />;
+
+  // Loading state – show a visible spinner, never blank.
+  if (auth === "loading") {
+    return (
+      <div className="min-h-screen grid place-items-center">
+        <div className="text-white/70">Loading…</div>
+      </div>
+    );
+  }
+
+  // Not authenticated – show SignIn regardless of route
+  if (auth === "anon") return <SignIn />;
+
+  // Authenticated shell
+  return <AuthedShell me={me!} />;
 }

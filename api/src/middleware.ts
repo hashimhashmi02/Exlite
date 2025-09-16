@@ -16,3 +16,4 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 export function getUserEmail(req: Request): string {
   return (req as any).userEmail as string;
 }
+
