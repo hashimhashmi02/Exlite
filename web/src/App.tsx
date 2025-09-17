@@ -78,12 +78,12 @@ export default function App() {
       }
     })();
     return () => { mounted = false; };
-  }, [loc.key]); // re-check on navigation
+  }, [loc.key]);
 
-  // Always allow the token exchange page
+ 
   if (loc.pathname === "/magic") return <Magic />;
 
-  // Loading state – show a visible spinner, never blank.
+
   if (auth === "loading") {
     return (
       <div className="min-h-screen grid place-items-center">
@@ -92,9 +92,8 @@ export default function App() {
     );
   }
 
-  // Not authenticated – show SignIn regardless of route
   if (auth === "anon") return <SignIn />;
 
-  // Authenticated shell
+
   return <AuthedShell me={me!} />;
 }

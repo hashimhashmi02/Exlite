@@ -1,4 +1,3 @@
-// api/src/marketFeed.ts
 import WebSocket from "ws";
 
 export type Sym = "BTC" | "ETH" | "SOL";
@@ -16,25 +15,21 @@ const last: Record<Sym, Quote> = {
   SOL: { bid: 0, ask: 0, mid: 0, decimals: 2 },
 };
 
-// lightweight pub/sub for SSE
 const subs = new Set<(payload: { quotes: Record<Sym, Quote> }) => void>();
 function emit() {
   const payload = { quotes: { ...last } };
   subs.forEach((fn) => fn(payload));
 }
-
-/** Subscribe to quote pushes (for SSE). Returns an unsubscribe. */
 export function onQuote(fn: (payload: { quotes: Record<Sym, Quote> }) => void) {
   subs.add(fn);
   return () => subs.delete(fn);
 }
 
-/** Return latest quotes snapshot */
+
 export function getQuotes() {
   return last;
 }
 
-/** REST candles from Binance; mapped to [openTime, open, high, low, close, volume] */
 export async function getKlines(
   asset: Sym | string,
   interval = "1m",
@@ -45,16 +40,16 @@ export async function getKlines(
   const url = `https://api.binance.com/api/v3/klines?symbol=${pair}&interval=${interval}&limit=${limit}`;
   const res = await fetch(url);
   const raw = (await res.json()) as any[];
-  // [openTime, open, high, low, close, volume, ...]
+
   return raw.map((r) => [r[0], r[1], r[2], r[3], r[4], r[5]]);
 }
 
-/** (optional no-op) */
+
 export async function initPricesFromDB() {
-  // keep no-op for compatibility
+
 }
 
-/** Start bookTicker stream. Calls cb(sym, mid, decimals) on updates */
+
 export async function startPricesSubscriber(
   cb?: (sym: Sym, price: number, decimals?: number) => void
 ) {
@@ -71,15 +66,15 @@ export async function startPricesSubscriber(
     ws = new WebSocket(URL);
 
     ws.on("open", () => {
-      // console.log("Binance WS connected");
+   
     });
 
     ws.on("message", (buf) => {
       try {
         const msg = JSON.parse(buf.toString());
-        const stream: string = msg.stream; // e.g. "btcusdt@bookTicker"
-        const data = msg.data; // {b: "bid", a: "ask", ...}
-        const pair = stream.split("@")[0]; // "btcusdt"
+        const stream: string = msg.stream; 
+        const data = msg.data; 
+        const pair = stream.split("@")[0];
         const entry = Object.entries(MAP).find(([, v]) => v === pair);
         if (!entry) return;
         const sym = entry[0] as Sym;
@@ -91,7 +86,7 @@ export async function startPricesSubscriber(
         const mid = (bid + ask) / 2;
         last[sym] = { bid, ask, mid, decimals: 2 };
 
-        // notify SSE subscribers + engine
+   
         emit();
         cb?.(sym, mid, 2);
       } catch {}

@@ -10,7 +10,7 @@ function debounceSave(delayMs = 1000) {
 }
 
 export function scheduleSnapshotSave() {
-  debounceSave(750); // write-burst ko smooth karo
+  debounceSave(750); 
 }
 
 export async function persistNow() {

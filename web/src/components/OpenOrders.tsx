@@ -20,7 +20,7 @@ export default function OpenOrdersTable() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 2000); // light polling to reflect new opens
+    const t = setInterval(load, 2000); 
     return () => clearInterval(t);
   }, []);
 

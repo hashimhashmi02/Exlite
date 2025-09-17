@@ -13,7 +13,6 @@ export default function Instruments({ picked, onPick }: Props) {
   const [bbo, setBbo] = useState<Record<string, { bid: number; ask: number }>>({});
   const [qErr, setQErr] = useState<string | null>(null);
 
-  // load assets once
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -30,14 +29,14 @@ export default function Instruments({ picked, onPick }: Props) {
 
         if (!cancelled) setAssets(rows);
       } catch (e) {
-        // fallback on failure
+  
         if (!cancelled) setAssets(DEFAULT_ASSETS);
       }
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // poll quotes every 2s for whatever symbols we have
+
   const symbols = useMemo(() => assets.map(a => a.symbol), [assets]);
   useEffect(() => {
     if (!symbols.length) return;

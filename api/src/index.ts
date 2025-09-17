@@ -15,14 +15,17 @@ import {
 import * as engine from "./engine.js";
 import * as marketFeed from "./marketFeed.js";
 
+import { initMailer, sendMagicLink } from "./mailer.js";
+
 type Sym = engine.AssetSym;
 
-const app = express();
-const PORT = Number(process.env.PORT || 8080);
 
-app.use(morgan("dev"));
-app.use(express.json());
+const app = express();
+const PORT = Number(process.env.PORT || env.PORT || 8080);
+
+app.use(morgan(env.NODE_ENV === "development" ? "dev" : "combined"));
 app.use(cookieParser());
+app.use(express.json());
 app.use(
   cors({
     origin: env.FRONTEND_URL,
@@ -30,14 +33,21 @@ app.use(
   })
 );
 
-// ---------- utils ----------
+
 const cents = (n: number) => Math.round(Number(n) * 100);
 const toRawPx = (px: number, decimals: number) =>
   String(Math.round(Number(px) * 10 ** decimals));
 const getDecimals = (sym: Sym) =>
   Number(engine.getQuotes()[sym]?.decimals ?? 2);
 
-// ---------- best-effort market feed bootstrap ----------
+const cookieOpts = {
+  httpOnly: true as const,
+  sameSite: "lax" as const,
+  secure: env.NODE_ENV !== "development",
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+};
+
+
 (async () => {
   try {
     if (typeof (marketFeed as any).initPricesFromDB === "function") {
@@ -46,6 +56,7 @@ const getDecimals = (sym: Sym) =>
     const start =
       (marketFeed as any).startPriceSubscriber ??
       (marketFeed as any).startPricesSubscriber;
+
     if (typeof start === "function") {
       await start((sym: Sym, price: number) => {
         try {
@@ -58,44 +69,47 @@ const getDecimals = (sym: Sym) =>
   }
 })();
 
-// ---------- auth ----------
-const cookieOpts = {
-  httpOnly: true as const,
-  sameSite: "lax" as const,
-  secure: env.NODE_ENV !== "development",
-  maxAge: 7 * 24 * 60 * 60 * 1000,
-};
+(async () => {
+  try {
+    await initMailer();
+  } catch (e) {
+    console.warn("⚠️  Mailer not initialised:", (e as Error).message);
+  }
+})();
+
 
 app.post("/api/v1/signin", async (req, res) => {
   const email = String(req.body?.email || "").trim();
   if (!email || !email.includes("@")) {
     return res.status(400).json({ ok: false, error: "Invalid email" });
   }
+
   const token = createMagicToken(email);
-
-  // keep the magic URL off the page; log during dev only
-  if (env.NODE_ENV === "development") {
-    console.log(
-      "Magic URL:",
-      `${env.FRONTEND_URL}/magic?token=${encodeURIComponent(token)}`
-    );
-  }
-  res.json({ ok: true });
-});
-
-app.get("/api/v1/magic", (req, res) => {
-  const token = String(req.query.token || "");
-  if (!token) return res.status(400).send("Missing token");
+  const magicUrl = `${env.FRONTEND_URL}/magic?token=${encodeURIComponent(
+    token
+  )}`;
 
   try {
-    const { email } = verifyMagicToken(token);
-    const session = createSessionToken(email);
-    res.cookie("session", session, cookieOpts);
-    return res.redirect(`${env.FRONTEND_URL}/trade`);
-  } catch {
-    return res.status(400).send("Invalid or expired link");
+    await sendMagicLink(email, magicUrl);
+    if (env.NODE_ENV === "development") {
+      console.log("Magic URL:", magicUrl);
+    }
+    return res.json({
+      ok: true,
+      email,
+      magicUrl: env.NODE_ENV === "development" ? magicUrl : undefined,
+    });
+  } catch (e) {
+    console.warn("sendMagicLink failed:", (e as Error).message);
+
+    return res.json({
+      ok: true,
+      email,
+      magicUrl: env.NODE_ENV === "development" ? magicUrl : undefined,
+    });
   }
 });
+
 
 app.post("/api/v1/magic/exchange", (req, res) => {
   const token = String(req.body?.token || "");
@@ -111,10 +125,21 @@ app.post("/api/v1/magic/exchange", (req, res) => {
   }
 });
 
-app.post("/api/v1/logout", (req, res) => {
-  res.clearCookie("session", { ...cookieOpts, maxAge: 0 });
-  res.json({ ok: true });
+
+app.get("/api/v1/magic", (req, res) => {
+  const token = String(req.query.token || "");
+  if (!token) return res.status(400).send("Missing token");
+
+  try {
+    const { email } = verifyMagicToken(token);
+    const session = createSessionToken(email);
+    res.cookie("session", session, cookieOpts);
+    return res.redirect(`${env.FRONTEND_URL}/trade`);
+  } catch {
+    return res.status(400).send("Invalid or expired link");
+  }
 });
+
 
 app.get("/api/v1/me", (req, res) => {
   const token = req.cookies?.session as string | undefined;
@@ -127,8 +152,8 @@ app.get("/api/v1/me", (req, res) => {
   }
 });
 
-// ---------- market data ----------
-app.get("/api/v1/supportedAssets", requireAuth, (_req, res) => {
+
+app.get("/api/v1/supportedAssets", (_req, res) => {
   res.json({
     assets: [
       { symbol: "BTC", name: "Bitcoin", imageUrl: "" },
@@ -150,7 +175,6 @@ app.get("/api/v1/price", requireAuth, (req, res) => {
 });
 
 app.get("/api/v1/quotes", requireAuth, (_req, res) => {
-  // Try external feed; otherwise synthesize from engine quotes.
   const mf =
     typeof (marketFeed as any).getQuotes === "function"
       ? (marketFeed as any).getQuotes()
@@ -171,6 +195,7 @@ app.get("/api/v1/quotes", requireAuth, (_req, res) => {
     const p = engine.getQuotes()[sym];
     const mid = Number(p?.price ?? 0);
     const d = Number(p?.decimals ?? 2);
+ 
     return { symbol: sym, bid: mid * 0.999, ask: mid * 1.001, mid, decimals: d };
   };
 
@@ -197,14 +222,12 @@ app.get("/api/v1/klines", requireAuth, async (req, res) => {
   }
 });
 
-// ---------- balances ----------
 app.get("/api/v1/balance/usd", requireAuth, (req, res) => {
   const email = (req as any).userEmail as string;
   const b = engine.getUsdBalance(email);
   res.json({ balance: Number(b.cash ?? 0) });
 });
 
-// Some UIs call this too; return a simple shape.
 app.get("/api/v1/balance", requireAuth, (req, res) => {
   const email = (req as any).userEmail as string;
   const b = engine.getUsdBalance(email);
@@ -213,14 +236,13 @@ app.get("/api/v1/balance", requireAuth, (req, res) => {
   });
 });
 
-// ---------- mapping helpers ----------
 type OpenOrderDTO = {
   orderId: string;
   asset: string;
   side: "LONG" | "SHORT";
   marginCents: string;
   leverage: number;
-  entryPrice?: string;      // raw, scaled by assetDecimals
+  entryPrice?: string;
   assetDecimals: number;
 };
 
@@ -255,7 +277,8 @@ const mapClosed = (o: engine.ClosedOrder) => {
   };
 };
 
-// ---------- orders ----------
+
+
 app.get("/api/v1/openOrders", requireAuth, (req, res) => {
   const email = (req as any).userEmail as string;
   const raw = engine.listOpenOrders(email) || [];
@@ -267,6 +290,8 @@ app.get("/api/v1/closedOrders", requireAuth, (req, res) => {
   const raw = engine.listClosedOrders(email) || [];
   res.json({ orders: raw.map(mapClosed) });
 });
+
+
 
 app.post("/api/v1/trade/create", requireAuth, (req, res) => {
   try {
@@ -304,7 +329,6 @@ app.post("/api/v1/trade/close", requireAuth, (req, res) => {
   }
 });
 
-// legacy alias
 app.post("/api/v1/closeTrade", requireAuth, (req, res) => {
   try {
     const email = (req as any).userEmail as string;
@@ -318,7 +342,7 @@ app.post("/api/v1/closeTrade", requireAuth, (req, res) => {
   }
 });
 
-// ---------- start ----------
+
 app.listen(PORT, () => {
   console.log(`🚀 API listening on http://localhost:${PORT}`);
 });

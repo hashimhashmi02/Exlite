@@ -1,4 +1,3 @@
-// ESM-compatible
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
 import type { Request, Response } from 'express';
@@ -18,7 +17,7 @@ export async function proxyKlines(req: Request, res: Response) {
   if (!r.ok) return res.status(r.status).json({ error: `binance ${r.status}` });
 
   const rows = (await r.json()) as KlineRow[];
-  // Normalize to: [ts_ms, open, high, low, close, volume] -> numbers
+
   const out = rows.map(k => ([
     k[0],
     Number(k[1]),
@@ -39,16 +38,12 @@ export async function proxyTicker(req: Request, res: Response) {
   res.json({ symbol: j.symbol, price: Number(j.price) });
 }
 
-/**
- * SSE stream that relays Binance 1m kline websocket
- *  GET /api/v1/market/stream?symbol=BTCUSDT
- */
 export function streamKlinesSSE(req: Request, res: Response) {
   const symbol = String(req.query.symbol || 'BTCUSDT').toUpperCase();
   const topic  = `${symbol.toLowerCase()}@kline_1m`;
   const wsUrl  = `${BINANCE_WS}/${topic}`;
 
-  // SSE headers
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -61,20 +56,19 @@ export function streamKlinesSSE(req: Request, res: Response) {
   }, 15000);
 
   ws.on('open', () => {
-    // notify client
+ 
     res.write(`event: open\ndata: {"ok":true}\n\n`);
   });
 
   ws.on('message', (buf) => {
     try {
       const m = JSON.parse(buf.toString());
-      // m.k has 1m kline
-      // https://binance-docs.github.io/apidocs/spot/en/#kline-candlestick-streams
+   
       const k = m.k;
       if (!k) return;
       const payload = {
-        t: k.t,            // open time (ms)
-        T: k.T,            // close time (ms)
+        t: k.t,            
+        T: k.T,            
         o: Number(k.o),
         h: Number(k.h),
         l: Number(k.l),

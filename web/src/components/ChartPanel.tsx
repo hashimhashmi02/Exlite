@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { trading } from "../lib/api";
 import type { AssetSym } from "../lib/symbols";
 
-// import runtime only (skip lib TS types to avoid IDE errors)
 import { createChart, ColorType } from "lightweight-charts";
 
 type UTSec = number;
@@ -20,9 +19,9 @@ export default function ChartPanel({ asset, height = 520 }: Props) {
   const seriesRef = useRef<any>(null);
   const lastBarRef = useRef<Candle | null>(null);
   const pollRef = useRef<number | null>(null);
-  const genRef = useRef<number>(0); // generation guard for asset changes
+  const genRef = useRef<number>(0); 
 
-  // mount chart once
+
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -63,12 +62,12 @@ export default function ChartPanel({ asset, height = 520 }: Props) {
     };
   }, []);
 
-  // load + poll when asset changes
+ 
   useEffect(() => {
-    genRef.current += 1; // bump generation
+    genRef.current += 1; 
     const gen = genRef.current;
 
-    // clear any previous poll
+    
     if (pollRef.current) {
       window.clearInterval(pollRef.current);
       pollRef.current = null;
@@ -118,14 +117,14 @@ export default function ChartPanel({ asset, height = 520 }: Props) {
         lastBarRef.current = next;
         seriesRef.current.update(next as any);
       } catch {
-        /* ignore transient errors */
+      
       }
     }
 
-    // initial load + start polling
+  
     loadCandles();
     pollRef.current = window.setInterval(() => {
-      // pull fresh candles + a price tick every 2s
+ 
       loadCandles();
       tickPrice();
     }, 2000);
@@ -138,13 +137,13 @@ export default function ChartPanel({ asset, height = 520 }: Props) {
     };
   }, [asset]);
 
-  // IMPORTANT: ensure the container has a height; otherwise autoSize draws nothing.
+  
   return (
     <div className="w-full">
       <div
         ref={wrapRef}
         className="w-full rounded-xl overflow-hidden"
-        style={{ height }}   // default 520px; parent no longer needs h-full
+        style={{ height }}   
       />
     </div>
   );

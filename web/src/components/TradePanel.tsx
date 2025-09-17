@@ -11,7 +11,7 @@ export default function TradePanel({ asset }: { asset: string | null }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // live price every 2s
+
   useEffect(() => {
     let stop = false;
     const tick = async () => {

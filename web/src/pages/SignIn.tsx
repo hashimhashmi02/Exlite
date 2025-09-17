@@ -4,19 +4,13 @@ import { api } from "../lib/api";
 export default function SignIn() {
   const [email, setEmail] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
-  const [devLink, setDevLink] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function send() {
-    setMsg(null); setDevLink(null); setLoading(true);
+    setMsg(null); setLoading(true);
     try {
-      const r = await api.signin(email.trim()); 
-      if ((r as any).magicUrl) {
-        setMsg("Magic link created (dev). Click the link below or check your email.");
-        setDevLink((r as any).magicUrl);
-      } else {
-        setMsg("Magic link sent! Check your email.");
-      }
+      await api.signin(email.trim());
+      setMsg("Magic link sent! Check your email.");
     } catch (e: any) {
       setMsg(e?.message || "Failed to send");
     } finally {
@@ -49,13 +43,6 @@ export default function SignIn() {
         </button>
 
         {msg && <div className="mt-3 text-red-400">{msg}</div>}
-        {devLink && (
-          <div className="mt-3">
-            <a className="underline text-blue-300 break-all" href={devLink}>
-              {devLink}
-            </a>
-          </div>
-        )}
       </div>
     </div>
   );
