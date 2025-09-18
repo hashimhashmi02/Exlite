@@ -30,7 +30,6 @@ export async function sendMagicLinkEmail(to: string, link: string) {
            <p>Link expires in 15 minutes.</p>`,
   });
 
-  // Dev hints
   // @ts-ignore
   const preview = (nodemailer.getTestMessageUrl?.(info));
   if (preview) console.log("📧 Ethereal preview:", preview);

@@ -43,11 +43,11 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 export const api = {
-  /** who am i */
+
   me: (): Promise<Me> =>
     fetch(`${BASE}/api/v1/me`, { credentials: "include" }).then((r) => json<Me>(r)),
 
-  /** send magic link (dev returns magicUrl) */
+
   signin: (
     email: string
   ): Promise<{ ok: true; magicUrl?: string; email?: string }> =>
@@ -58,7 +58,7 @@ export const api = {
       body: JSON.stringify({ email }),
     }).then((r) => json(r)),
 
-  /** SPA exchange – posts token, backend sets cookie */
+    
   exchangeMagic: (token: string): Promise<{ ok: true; email: string }> =>
     fetch(`${BASE}/api/v1/magic/exchange`, {
       method: "POST",
