@@ -1,5 +1,4 @@
 export type Me = { authenticated: boolean; email?: string };
-
 export type Asset = { symbol: string; name: string; imageUrl: string };
 export type Quote = { symbol: string; bid: number; ask: number; mid: number; decimals: number };
 export type UsdBalance = { balance: number };
