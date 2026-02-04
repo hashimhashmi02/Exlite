@@ -1,12 +1,13 @@
 import jwt from 'jsonwebtoken';
 import { env } from './env.js';
+import { MAGIC_TOKEN_EXPIRY, SESSION_TOKEN_EXPIRY } from './types.js';
 
 type MagicTokenPayload = { email: string; kind: 'magic'; };
 type SessionPayload = { email: string; kind: 'session'; };
 
 export function createMagicToken(email: string) {
   const payload: MagicTokenPayload = { email, kind: 'magic' };
-  return jwt.sign(payload, env.JWT_SECRET, { expiresIn: '10m' }); // short TTL
+  return jwt.sign(payload, env.JWT_SECRET, { expiresIn: MAGIC_TOKEN_EXPIRY });
 }
 
 export function verifyMagicToken(token: string) {
@@ -17,7 +18,7 @@ export function verifyMagicToken(token: string) {
 
 export function createSessionToken(email: string) {
   const payload: SessionPayload = { email, kind: 'session' };
-  return jwt.sign(payload, env.JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign(payload, env.JWT_SECRET, { expiresIn: SESSION_TOKEN_EXPIRY });
 }
 
 export function verifySessionToken(token: string) {

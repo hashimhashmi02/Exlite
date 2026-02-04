@@ -1,0 +1,189 @@
+import { useState } from 'react';
+
+type Instrument = {
+    symbol: string;
+    name?: string;
+    bid: number;
+    ask: number;
+    signal?: 'up' | 'down' | 'neutral';
+};
+
+type Props = {
+    instruments: Instrument[];
+    selected: string;
+    onSelect: (symbol: string) => void;
+    onClose?: () => void;
+};
+
+// Crypto icon component with actual logos
+function CryptoIcon({ symbol }: { symbol: string }) {
+    const icons: Record<string, React.ReactNode> = {
+        BTC: (
+            <svg viewBox="0 0 32 32" className="w-5 h-5">
+                <circle cx="16" cy="16" r="16" fill="#F7931A" />
+                <path fill="white" d="M22.5 14.1c.3-2-1.2-3.1-3.3-3.8l.7-2.8-1.7-.4-.7 2.7c-.4-.1-.9-.2-1.4-.3l.7-2.7-1.7-.4-.7 2.8c-.4-.1-.7-.2-1-.2v0l-2.3-.6-.4 1.8s1.2.3 1.2.3c.7.2.8.6.8 1l-.8 3.3c0 0 .1 0 .2.1-.1 0-.1 0-.2 0l-1.2 4.7c-.1.2-.3.6-.8.4 0 0-1.2-.3-1.2-.3l-.8 1.9 2.2.5c.4.1.8.2 1.2.3l-.7 2.8 1.7.4.7-2.8c.5.1.9.2 1.4.3l-.7 2.8 1.7.4.7-2.8c2.9.5 5.1.3 6-2.3.7-2.1 0-3.3-1.5-4.1 1.1-.3 1.9-1 2.1-2.5zm-3.8 5.4c-.5 2.1-4.1 1-5.3.7l.9-3.8c1.2.3 4.9.9 4.4 3.1zm.5-5.4c-.5 1.9-3.5.9-4.5.7l.8-3.4c1 .2 4.1.7 3.7 2.7z" />
+            </svg>
+        ),
+        ETH: (
+            <svg viewBox="0 0 32 32" className="w-5 h-5">
+                <circle cx="16" cy="16" r="16" fill="#627EEA" />
+                <path fill="white" fillOpacity="0.6" d="M16.5 4v8.9l7.5 3.3z" />
+                <path fill="white" d="M16.5 4L9 16.2l7.5-3.3z" />
+                <path fill="white" fillOpacity="0.6" d="M16.5 21.9v6.1l7.5-10.4z" />
+                <path fill="white" d="M16.5 28v-6.1L9 17.6z" />
+                <path fill="white" fillOpacity="0.2" d="M16.5 20.6l7.5-4.4-7.5-3.3z" />
+                <path fill="white" fillOpacity="0.6" d="M9 16.2l7.5 4.4v-7.7z" />
+            </svg>
+        ),
+        SOL: (
+            <svg viewBox="0 0 32 32" className="w-5 h-5">
+                <circle cx="16" cy="16" r="16" fill="url(#sol-gradient)" />
+                <defs>
+                    <linearGradient id="sol-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor="#00FFA3" />
+                        <stop offset="100%" stopColor="#DC1FFF" />
+                    </linearGradient>
+                </defs>
+                <path fill="white" d="M9.5 19.4c.1-.1.3-.2.5-.2h12.7c.3 0 .5.4.3.6l-2.3 2.3c-.1.1-.3.2-.5.2H7.5c-.3 0-.5-.4-.3-.6l2.3-2.3zm0-9.6c.1-.1.3-.2.5-.2h12.7c.3 0 .5.4.3.6L20.7 12.5c-.1.1-.3.2-.5.2H7.5c-.3 0-.5-.4-.3-.6l2.3-2.3zm13 4.8c-.1-.1-.3-.2-.5-.2H9.3c-.3 0-.5.4-.3.6l2.3 2.3c.1.1.3.2.5.2h12.7c.3 0 .5-.4.3-.6l-2.3-2.3z" />
+            </svg>
+        ),
+        XRP: (
+            <svg viewBox="0 0 32 32" className="w-5 h-5">
+                <circle cx="16" cy="16" r="16" fill="#23292F" />
+                <path fill="white" d="M23.1 8h2.3l-5.3 5.3c-2.3 2.3-6 2.3-8.2 0L6.6 8h2.3l4.2 4.2c1.5 1.5 4 1.5 5.5 0L23.1 8zm-14.2 16H6.6l5.3-5.3c2.3-2.3 6-2.3 8.2 0l5.3 5.3h-2.3l-4.2-4.2c-1.5-1.5-4-1.5-5.5 0L8.9 24z" />
+            </svg>
+        ),
+        DOGE: (
+            <svg viewBox="0 0 32 32" className="w-5 h-5">
+                <circle cx="16" cy="16" r="16" fill="#C2A633" />
+                <path fill="white" d="M13 8h4.5c3.3 0 6 2.7 6 6v4c0 3.3-2.7 6-6 6H13V8zm3 3v10h1.5c1.7 0 3-1.3 3-3v-4c0-1.7-1.3-3-3-3H16z" />
+                <rect fill="white" x="11" y="14.5" width="8" height="3" rx="1" />
+            </svg>
+        ),
+        ADA: (
+            <svg viewBox="0 0 32 32" className="w-5 h-5">
+                <circle cx="16" cy="16" r="16" fill="#0033AD" />
+                <circle fill="white" cx="16" cy="16" r="3" />
+                <circle fill="white" cx="16" cy="8" r="1.5" />
+                <circle fill="white" cx="16" cy="24" r="1.5" />
+                <circle fill="white" cx="9" cy="12" r="1.5" />
+                <circle fill="white" cx="23" cy="12" r="1.5" />
+                <circle fill="white" cx="9" cy="20" r="1.5" />
+                <circle fill="white" cx="23" cy="20" r="1.5" />
+            </svg>
+        ),
+        AVAX: (
+            <svg viewBox="0 0 32 32" className="w-5 h-5">
+                <circle cx="16" cy="16" r="16" fill="#E84142" />
+                <path fill="white" d="M11.5 21h-3L16 9l2.5 4.5-4.5 7.5h-2.5zm9 0h-3l-2-3.5 1.5-2.5 3.5 6z" />
+            </svg>
+        ),
+        MATIC: (
+            <svg viewBox="0 0 32 32" className="w-5 h-5">
+                <circle cx="16" cy="16" r="16" fill="#8247E5" />
+                <path fill="white" d="M21 13.5l-4-2.3c-.6-.4-1.4-.4-2 0l-4 2.3c-.6.4-1 1-1 1.7v4.6c0 .7.4 1.3 1 1.7l4 2.3c.6.4 1.4.4 2 0l4-2.3c.6-.4 1-1 1-1.7v-4.6c0-.7-.4-1.3-1-1.7z" />
+            </svg>
+        ),
+        LINK: (
+            <svg viewBox="0 0 32 32" className="w-5 h-5">
+                <circle cx="16" cy="16" r="16" fill="#2A5ADA" />
+                <path fill="white" d="M16 6l-2 1.2-6 3.5L6 12v8l2 1.2 6 3.5 2 1.2 2-1.2 6-3.5 2-1.2v-8l-2-1.2-6-3.5-2-1.2zm0 3.5l4 2.3v4.6l-4 2.3-4-2.3v-4.6l4-2.3z" />
+            </svg>
+        ),
+    };
+    return icons[symbol] || <div className="w-5 h-5 rounded-full bg-gray-500 flex items-center justify-center text-[8px] font-bold text-white">{symbol[0]}</div>;
+}
+
+export default function MarketWatchPanel({ instruments, selected, onSelect, onClose }: Props) {
+    const [search, setSearch] = useState('');
+
+    const filtered = instruments.filter(i =>
+        i.symbol.toLowerCase().includes(search.toLowerCase()) ||
+        i.name?.toLowerCase().includes(search.toLowerCase())
+    );
+
+    const getSignalArrow = (signal?: 'up' | 'down' | 'neutral') => {
+        if (signal === 'up') return <span className="text-green-400">↑</span>;
+        if (signal === 'down') return <span className="text-red-400">↓</span>;
+        return <span className="text-gray-500">→</span>;
+    };
+
+    return (
+        <div className="w-[280px] h-full bg-[#0d0f13] border-r border-[#2a2e39] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-3 py-2 border-b border-[#2a2e39]">
+                <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                    <span className="text-xs font-medium text-white uppercase tracking-wide">Instruments</span>
+                </div>
+                <div className="flex items-center gap-1">
+                    <button className="p-1 text-gray-500 hover:text-white">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 5v.01M12 12v.01M12 19v.01" />
+                        </svg>
+                    </button>
+                    {onClose && (
+                        <button onClick={onClose} className="p-1 text-gray-500 hover:text-white">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {/* Search */}
+            <div className="px-3 py-2 border-b border-[#2a2e39]">
+                <div className="relative">
+                    <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <input
+                        type="text"
+                        placeholder="Search"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        className="w-full bg-[#1a1d24] border border-[#2a2e39] rounded px-8 py-1.5 text-xs text-white placeholder:text-gray-500 outline-none focus:border-gray-600"
+                    />
+                </div>
+            </div>
+
+            {/* Column Headers */}
+            <div className="grid grid-cols-[1fr,auto,80px,80px] gap-1 px-3 py-1.5 border-b border-[#2a2e39] text-[10px] text-gray-500 uppercase">
+                <span>Symbol</span>
+                <span>Signal</span>
+                <span className="text-right">Bid</span>
+                <span className="text-right">Ask</span>
+            </div>
+
+            {/* Instruments List */}
+            <div className="flex-1 overflow-auto">
+                {filtered.map((inst) => (
+                    <button
+                        key={inst.symbol}
+                        onClick={() => onSelect(inst.symbol)}
+                        className={`w-full grid grid-cols-[1fr,auto,80px,80px] gap-1 px-3 py-2 text-xs hover:bg-[#1a1d24] transition-colors ${selected === inst.symbol ? 'bg-[#1a1d24]' : ''
+                            }`}
+                    >
+                        <div className="flex items-center gap-2">
+                            <CryptoIcon symbol={inst.symbol} />
+                            <span className="font-medium text-white">{inst.symbol}</span>
+                            <span className="text-gray-400 text-[10px]">||</span>
+                        </div>
+                        <div className="flex items-center justify-center w-6">
+                            {getSignalArrow(inst.signal)}
+                        </div>
+                        <span className="text-right text-red-400 font-mono">
+                            {inst.bid.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </span>
+                        <span className="text-right text-blue-400 font-mono">
+                            {inst.ask.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </span>
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+}
