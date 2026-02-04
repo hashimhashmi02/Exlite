@@ -1,9 +1,17 @@
-export type AssetSym = "BTC" | "ETH" | "SOL";
+import { DEFAULT_USER_BALANCE } from './types.js';
+
+export type AssetSym = "BTC" | "ETH" | "SOL" | "XRP" | "DOGE" | "ADA" | "AVAX" | "MATIC" | "LINK";
 type Quote = { price: number; decimals: number };
 const QUOTES: Record<AssetSym, Quote> = {
   BTC: { price: 110000, decimals: 2 },
   ETH: { price: 3500, decimals: 2 },
   SOL: { price: 150, decimals: 2 },
+  XRP: { price: 0.50, decimals: 4 },
+  DOGE: { price: 0.10, decimals: 5 },
+  ADA: { price: 0.40, decimals: 4 },
+  AVAX: { price: 30, decimals: 2 },
+  MATIC: { price: 0.60, decimals: 4 },
+  LINK: { price: 15, decimals: 2 },
 };
 export type Side = "LONG" | "SHORT";
 
@@ -30,7 +38,17 @@ type Quotes = Record<AssetSym, number>;
 const balances = new Map<string, number>();          
 const openByUser = new Map<string, OpenOrder[]>();  
 const closedByUser = new Map<string, ClosedOrder[]>();
-const quotes: Quotes = { BTC: 113000, ETH: 4500, SOL: 250 };
+const quotes: Quotes = { 
+  BTC: 113000, 
+  ETH: 4500, 
+  SOL: 250,
+  XRP: 0.50,
+  DOGE: 0.10,
+  ADA: 0.40,
+  AVAX: 30,
+  MATIC: 0.60,
+  LINK: 15
+};
 
 
 function uid(): string {
@@ -38,7 +56,7 @@ function uid(): string {
 }
 
 function ensureUser(email: string) {
-  if (!balances.has(email)) balances.set(email, 1_000_000); 
+  if (!balances.has(email)) balances.set(email, DEFAULT_USER_BALANCE);
   if (!openByUser.has(email)) openByUser.set(email, []);
   if (!closedByUser.has(email)) closedByUser.set(email, []);
 }
@@ -150,7 +168,35 @@ export function closeTrade(email: string, orderId: string): ClosedOrder {
   closedByUser.get(email)!.push(closed);
   return closed;
 }
-export function getAllBalances(email: string) {
-  throw new Error("Function not implemented.");
+
+// ==================== State Persistence ====================
+
+export type EngineState = {
+  balances: Record<string, number>;
+  openOrders: Record<string, OpenOrder[]>;
+  closedOrders: Record<string, ClosedOrder[]>;
+};
+
+export function dumpState(): EngineState {
+  return {
+    balances: Object.fromEntries(balances),
+    openOrders: Object.fromEntries(openByUser),
+    closedOrders: Object.fromEntries(closedByUser),
+  };
 }
 
+export function restoreState(state: EngineState): void {
+  balances.clear();
+  openByUser.clear();
+  closedByUser.clear();
+
+  for (const [email, bal] of Object.entries(state.balances || {})) {
+    balances.set(email, bal);
+  }
+  for (const [email, orders] of Object.entries(state.openOrders || {})) {
+    openByUser.set(email, orders);
+  }
+  for (const [email, orders] of Object.entries(state.closedOrders || {})) {
+    closedByUser.set(email, orders);
+  }
+}

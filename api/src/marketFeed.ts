@@ -1,18 +1,30 @@
 import WebSocket from "ws";
 
-export type Sym = "BTC" | "ETH" | "SOL";
+export type Sym = "BTC" | "ETH" | "SOL" | "XRP" | "DOGE" | "ADA" | "AVAX" | "MATIC" | "LINK";
 type Quote = { bid: number; ask: number; mid: number; decimals: number };
 
 const MAP: Record<Sym, string> = {
   BTC: "btcusdt",
   ETH: "ethusdt",
   SOL: "solusdt",
+  XRP: "xrpusdt",
+  DOGE: "dogeusdt",
+  ADA: "adausdt",
+  AVAX: "avaxusdt",
+  MATIC: "maticusdt",
+  LINK: "linkusdt",
 };
 
 const last: Record<Sym, Quote> = {
   BTC: { bid: 0, ask: 0, mid: 0, decimals: 2 },
   ETH: { bid: 0, ask: 0, mid: 0, decimals: 2 },
   SOL: { bid: 0, ask: 0, mid: 0, decimals: 2 },
+  XRP: { bid: 0, ask: 0, mid: 0, decimals: 4 },
+  DOGE: { bid: 0, ask: 0, mid: 0, decimals: 5 },
+  ADA: { bid: 0, ask: 0, mid: 0, decimals: 4 },
+  AVAX: { bid: 0, ask: 0, mid: 0, decimals: 2 },
+  MATIC: { bid: 0, ask: 0, mid: 0, decimals: 4 },
+  LINK: { bid: 0, ask: 0, mid: 0, decimals: 2 },
 };
 
 const subs = new Set<(payload: { quotes: Record<Sym, Quote> }) => void>();

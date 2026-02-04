@@ -13,10 +13,20 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  ClosedOrder ClosedOrder[]
+  balance      UserBalance?
+  openOrders   OpenOrder[]
+  closedOrders ClosedOrder[]
 }
 
+model UserBalance {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique
+  balance   BigInt   @db.BigInt // cents
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
 
 enum OrderSide {
   LONG
@@ -24,36 +34,54 @@ enum OrderSide {
 }
 
 model Asset {
-  id          Int           @id @default(autoincrement())
-  symbol      String        @unique
-  name        String
-  imageUrl    String
-  decimals    Int           
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id        Int      @id @default(autoincrement())
+  symbol    String   @unique
+  name      String
+  imageUrl  String
+  decimals  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  openOrders   OpenOrder[]
   closedOrders ClosedOrder[]
 }
 
-model ClosedOrder {
-  id         String     @id @default(cuid()) 
+model OpenOrder {
+  id         String    @id @default(cuid())
   userId     Int
   assetId    Int
   side       OrderSide
-  margin     BigInt     @db.BigInt   
+  margin     BigInt    @db.BigInt
   leverage   Int
-  entryPrice BigInt     @db.BigInt   
-  exitPrice  BigInt     @db.BigInt   
-  pnl        BigInt     @db.BigInt   
-  createdAt  DateTime   @default(now())
-  closedAt   DateTime   @default(now())
+  entryPrice BigInt    @db.BigInt
+  openedAt   DateTime  @default(now())
 
-  user   User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  asset  Asset @relation(fields: [assetId], references: [id])
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  asset Asset @relation(fields: [assetId], references: [id])
 
   @@index([userId])
   @@index([assetId])
 }
 
+model ClosedOrder {
+  id         String    @id @default(cuid())
+  userId     Int
+  assetId    Int
+  side       OrderSide
+  margin     BigInt    @db.BigInt
+  leverage   Int
+  entryPrice BigInt    @db.BigInt
+  exitPrice  BigInt    @db.BigInt
+  pnl        BigInt    @db.BigInt
+  createdAt  DateTime  @default(now())
+  closedAt   DateTime  @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  asset Asset @relation(fields: [assetId], references: [id])
+
+  @@index([userId])
+  @@index([assetId])
+}
 
 model Snapshot {
   id        Int      @id @default(autoincrement())

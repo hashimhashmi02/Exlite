@@ -11,15 +11,15 @@ function toSec(ts: number): UTSec {
   return ts > 1_000_000_000_000 ? Math.floor(ts / 1000) : Math.floor(ts);
 }
 
-type Props = { asset: AssetSym; height?: number };
+type Props = { asset: AssetSym; height?: number; interval?: string };
 
-export default function ChartPanel({ asset, height = 520 }: Props) {
+export default function ChartPanel({ asset, height = 520, interval = '1m' }: Props) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
   const seriesRef = useRef<any>(null);
   const lastBarRef = useRef<Candle | null>(null);
   const pollRef = useRef<number | null>(null);
-  const genRef = useRef<number>(0); 
+  const genRef = useRef<number>(0);
 
 
   useEffect(() => {
@@ -62,12 +62,12 @@ export default function ChartPanel({ asset, height = 520 }: Props) {
     };
   }, []);
 
- 
+
   useEffect(() => {
-    genRef.current += 1; 
+    genRef.current += 1;
     const gen = genRef.current;
 
-    
+
     if (pollRef.current) {
       window.clearInterval(pollRef.current);
       pollRef.current = null;
@@ -76,7 +76,7 @@ export default function ChartPanel({ asset, height = 520 }: Props) {
     async function loadCandles() {
       if (!seriesRef.current) return;
       try {
-        const raw = await trading.klines(asset, 500).catch(() => []);
+        const raw = await trading.klines(asset, 500, interval).catch(() => []);
         const rows: any[] = Array.isArray(raw) ? raw : [];
 
         const data: Candle[] = rows.map((r) => ({
@@ -117,14 +117,14 @@ export default function ChartPanel({ asset, height = 520 }: Props) {
         lastBarRef.current = next;
         seriesRef.current.update(next as any);
       } catch {
-      
+
       }
     }
 
-  
+
     loadCandles();
     pollRef.current = window.setInterval(() => {
- 
+
       loadCandles();
       tickPrice();
     }, 2000);
@@ -135,15 +135,15 @@ export default function ChartPanel({ asset, height = 520 }: Props) {
         pollRef.current = null;
       }
     };
-  }, [asset]);
+  }, [asset, interval]);
 
-  
+
   return (
     <div className="w-full">
       <div
         ref={wrapRef}
         className="w-full rounded-xl overflow-hidden"
-        style={{ height }}   
+        style={{ height }}
       />
     </div>
   );

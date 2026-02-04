@@ -66,6 +66,12 @@ export const api = {
       body: JSON.stringify({ token }),
     }).then((r) => json(r)),
 
+  logout: (): Promise<{ ok: true }> =>
+    fetch(`${BASE}/api/v1/logout`, {
+      method: "POST",
+      credentials: "include",
+    }).then((r) => json(r)),
+
   supportedAssets: (): Promise<{ assets: Asset[] }> =>
     fetch(`${BASE}/api/v1/supportedAssets`, { credentials: "include" })
       .then((r) => json<{ assets: Asset[] }>(r)),
@@ -119,9 +125,9 @@ export const trading = {
       body: JSON.stringify({ orderId }),
     }).then((r) => json<TradeCloseResp>(r)),
 
-  klines: (asset: string, limit = 240): Promise<Kline[]> =>
+  klines: (asset: string, limit = 240, interval = '1m'): Promise<Kline[]> =>
     fetch(
-      `${BASE}/api/v1/klines?asset=${encodeURIComponent(asset)}&interval=1m&limit=${limit}`,
+      `${BASE}/api/v1/klines?asset=${encodeURIComponent(asset)}&interval=${interval}&limit=${limit}`,
       { credentials: "include" }
     ).then((r) => json<Kline[]>(r)),
 };

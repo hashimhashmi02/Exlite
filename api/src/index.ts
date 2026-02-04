@@ -2,9 +2,10 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import morgan from "morgan";
+import rateLimit from "express-rate-limit";
 
 import { env } from "./env.js";
-import { requireAuth } from "./middleware.js";
+import { requireAuth, getUserEmail } from "./middleware.js";
 import {
   createMagicToken,
   createSessionToken,
@@ -16,6 +17,19 @@ import * as engine from "./engine.js";
 import * as marketFeed from "./marketFeed.js";
 
 import { initMailer, sendMagicLink } from "./mailer.js";
+import { log } from "./logger.js";
+import { 
+  validate, 
+  SigninSchema, 
+  MagicExchangeSchema, 
+  TradeCreateSchema, 
+  TradeCloseSchema,
+  SESSION_MAX_AGE_MS,
+  RATE_LIMIT_WINDOW_MS,
+  RATE_LIMIT_SIGNIN_MAX,
+  RATE_LIMIT_MAGIC_MAX,
+  DEFAULT_DECIMALS
+} from "./types.js";
 
 type Sym = engine.AssetSym;
 
@@ -33,18 +47,34 @@ app.use(
   })
 );
 
+// Rate limiting for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: RATE_LIMIT_SIGNIN_MAX,
+  message: { ok: false, error: 'Too many requests, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const magicLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: RATE_LIMIT_MAGIC_MAX,
+  message: { ok: false, error: 'Too many requests, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 const cents = (n: number) => Math.round(Number(n) * 100);
 const toRawPx = (px: number, decimals: number) =>
   String(Math.round(Number(px) * 10 ** decimals));
 const getDecimals = (sym: Sym) =>
-  Number(engine.getQuotes()[sym]?.decimals ?? 2);
+  Number(engine.getQuotes()[sym]?.decimals ?? DEFAULT_DECIMALS);
 
 const cookieOpts = {
   httpOnly: true as const,
   sameSite: "lax" as const,
   secure: env.NODE_ENV !== "development",
-  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  maxAge: SESSION_MAX_AGE_MS,
 };
 
 
@@ -65,7 +95,7 @@ const cookieOpts = {
       });
     }
   } catch (e) {
-    console.warn("Market feed not started:", (e as Error)?.message || e);
+    log.warn("Market feed not started", { error: (e as Error)?.message || e });
   }
 })();
 
@@ -73,16 +103,13 @@ const cookieOpts = {
   try {
     await initMailer();
   } catch (e) {
-    console.warn("⚠️  Mailer not initialised:", (e as Error).message);
+    log.warn("Mailer not initialised", { error: (e as Error).message });
   }
 })();
 
 
-app.post("/api/v1/signin", async (req, res) => {
-  const email = String(req.body?.email || "").trim();
-  if (!email || !email.includes("@")) {
-    return res.status(400).json({ ok: false, error: "Invalid email" });
-  }
+app.post("/api/v1/signin", authLimiter, validate(SigninSchema), async (req, res) => {
+  const { email } = req.body;
 
   const token = createMagicToken(email);
   const magicUrl = `${env.FRONTEND_URL}/magic?token=${encodeURIComponent(
@@ -92,7 +119,7 @@ app.post("/api/v1/signin", async (req, res) => {
   try {
     await sendMagicLink(email, magicUrl);
     if (env.NODE_ENV === "development") {
-      console.log("Magic URL:", magicUrl);
+      log.debug("Magic URL generated", { magicUrl });
     }
     return res.json({
       ok: true,
@@ -100,7 +127,7 @@ app.post("/api/v1/signin", async (req, res) => {
       magicUrl: env.NODE_ENV === "development" ? magicUrl : undefined,
     });
   } catch (e) {
-    console.warn("sendMagicLink failed:", (e as Error).message);
+    log.warn("sendMagicLink failed", { error: (e as Error).message });
 
     return res.json({
       ok: true,
@@ -111,9 +138,8 @@ app.post("/api/v1/signin", async (req, res) => {
 });
 
 
-app.post("/api/v1/magic/exchange", (req, res) => {
-  const token = String(req.body?.token || "");
-  if (!token) return res.status(400).json({ ok: false, error: "Missing token" });
+app.post("/api/v1/magic/exchange", magicLimiter, validate(MagicExchangeSchema), (req, res) => {
+  const { token } = req.body;
 
   try {
     const { email } = verifyMagicToken(token);
@@ -152,6 +178,15 @@ app.get("/api/v1/me", (req, res) => {
   }
 });
 
+// Logout endpoint - clears the session cookie
+app.post("/api/v1/logout", (_req, res) => {
+  res.clearCookie("session", {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: env.NODE_ENV !== "development",
+  });
+  return res.json({ ok: true });
+});
 
 app.get("/api/v1/supportedAssets", (_req, res) => {
   res.json({
@@ -159,6 +194,12 @@ app.get("/api/v1/supportedAssets", (_req, res) => {
       { symbol: "BTC", name: "Bitcoin", imageUrl: "" },
       { symbol: "ETH", name: "Ethereum", imageUrl: "" },
       { symbol: "SOL", name: "Solana", imageUrl: "" },
+      { symbol: "XRP", name: "Ripple", imageUrl: "" },
+      { symbol: "DOGE", name: "Dogecoin", imageUrl: "" },
+      { symbol: "ADA", name: "Cardano", imageUrl: "" },
+      { symbol: "AVAX", name: "Avalanche", imageUrl: "" },
+      { symbol: "MATIC", name: "Polygon", imageUrl: "" },
+      { symbol: "LINK", name: "Chainlink", imageUrl: "" },
     ],
   });
 });
@@ -204,6 +245,12 @@ app.get("/api/v1/quotes", requireAuth, (_req, res) => {
       BTC: build("BTC"),
       ETH: build("ETH"),
       SOL: build("SOL"),
+      XRP: build("XRP"),
+      DOGE: build("DOGE"),
+      ADA: build("ADA"),
+      AVAX: build("AVAX"),
+      MATIC: build("MATIC"),
+      LINK: build("LINK"),
     },
     spreadBips: 0,
   });
@@ -223,13 +270,13 @@ app.get("/api/v1/klines", requireAuth, async (req, res) => {
 });
 
 app.get("/api/v1/balance/usd", requireAuth, (req, res) => {
-  const email = (req as any).userEmail as string;
+  const email = getUserEmail(req);
   const b = engine.getUsdBalance(email);
   res.json({ balance: Number(b.cash ?? 0) });
 });
 
 app.get("/api/v1/balance", requireAuth, (req, res) => {
-  const email = (req as any).userEmail as string;
+  const email = getUserEmail(req);
   const b = engine.getUsdBalance(email);
   res.json({
     USD: { balance: Number(b.cash ?? 0), decimals: 2 },
@@ -280,31 +327,31 @@ const mapClosed = (o: engine.ClosedOrder) => {
 
 
 app.get("/api/v1/openOrders", requireAuth, (req, res) => {
-  const email = (req as any).userEmail as string;
+  const email = getUserEmail(req);
   const raw = engine.listOpenOrders(email) || [];
   res.json({ orders: raw.map(mapOpen) });
 });
 
 app.get("/api/v1/closedOrders", requireAuth, (req, res) => {
-  const email = (req as any).userEmail as string;
+  const email = getUserEmail(req);
   const raw = engine.listClosedOrders(email) || [];
   res.json({ orders: raw.map(mapClosed) });
 });
 
 
 
-app.post("/api/v1/trade/create", requireAuth, (req, res) => {
+app.post("/api/v1/trade/create", requireAuth, validate(TradeCreateSchema), (req, res) => {
   try {
-    const email = (req as any).userEmail as string;
-    const { asset, type, margin, leverage } = req.body || {};
-    const symbol = String(asset || "BTC").toUpperCase() as Sym;
-    const side = String(type || "long").toUpperCase() === "SHORT" ? "SHORT" : "LONG";
+    const email = getUserEmail(req);
+    const { asset, type, margin, leverage } = req.body;
+    const symbol = asset.toUpperCase() as Sym;
+    const side = type.toUpperCase() === "SHORT" ? "SHORT" : "LONG";
 
     const order = engine.openTrade(email, {
       symbol,
       side,
-      margin: Number(margin),
-      leverage: Number(leverage || 1),
+      margin,
+      leverage,
     });
 
     res.json({ orderId: String(order.id) });
@@ -313,30 +360,17 @@ app.post("/api/v1/trade/create", requireAuth, (req, res) => {
   }
 });
 
-app.post("/api/v1/trade/close", requireAuth, (req, res) => {
+app.post("/api/v1/trade/close", requireAuth, validate(TradeCloseSchema), (req, res) => {
   try {
-    const email = (req as any).userEmail as string;
-    const orderId = String(req.body?.orderId ?? req.body?.id ?? "").trim();
-    if (!orderId) return res.status(400).json({ error: "orderId required" });
+    const email = getUserEmail(req);
+    const { orderId } = req.body;
 
     const closed = engine.closeTrade(email, orderId);
     res.json({
+      ok: true,
       orderId: String(closed.id),
       pnl: String(closed.pnl ?? 0),
     });
-  } catch (e) {
-    res.status(400).json({ error: (e as Error).message });
-  }
-});
-
-app.post("/api/v1/closeTrade", requireAuth, (req, res) => {
-  try {
-    const email = (req as any).userEmail as string;
-    const orderId = String(req.body?.orderId ?? req.body?.id ?? "").trim();
-    if (!orderId) return res.status(400).json({ ok: false, error: "orderId required" });
-
-    const closed = engine.closeTrade(email, orderId);
-    res.json({ ok: true, orderId: String(closed.id), pnl: String(closed.pnl ?? 0) });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
@@ -344,5 +378,5 @@ app.post("/api/v1/closeTrade", requireAuth, (req, res) => {
 
 
 app.listen(PORT, () => {
-  console.log(`🚀 API listening on http://localhost:${PORT}`);
+  log.info(`API listening on http://localhost:${PORT}`);
 });
