@@ -72,7 +72,7 @@ const getDecimals = (sym: Sym) =>
 
 const cookieOpts = {
   httpOnly: true as const,
-  sameSite: "lax" as const,
+  sameSite: "none" as const,
   secure: env.NODE_ENV !== "development",
   maxAge: SESSION_MAX_AGE_MS,
 };
@@ -182,7 +182,7 @@ app.get("/api/v1/me", (req, res) => {
 app.post("/api/v1/logout", (_req, res) => {
   res.clearCookie("session", {
     httpOnly: true,
-    sameSite: "lax" as const,
+    sameSite: "none" as const,
     secure: env.NODE_ENV !== "development",
   });
   return res.json({ ok: true });
