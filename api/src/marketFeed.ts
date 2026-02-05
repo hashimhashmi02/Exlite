@@ -16,15 +16,15 @@ const MAP: Record<Sym, string> = {
 };
 
 const last: Record<Sym, Quote> = {
-  BTC: { bid: 0, ask: 0, mid: 0, decimals: 2 },
-  ETH: { bid: 0, ask: 0, mid: 0, decimals: 2 },
-  SOL: { bid: 0, ask: 0, mid: 0, decimals: 2 },
-  XRP: { bid: 0, ask: 0, mid: 0, decimals: 4 },
-  DOGE: { bid: 0, ask: 0, mid: 0, decimals: 5 },
-  ADA: { bid: 0, ask: 0, mid: 0, decimals: 4 },
-  AVAX: { bid: 0, ask: 0, mid: 0, decimals: 2 },
-  MATIC: { bid: 0, ask: 0, mid: 0, decimals: 4 },
-  LINK: { bid: 0, ask: 0, mid: 0, decimals: 2 },
+  BTC: { bid: 96000, ask: 96100, mid: 96050, decimals: 2 },
+  ETH: { bid: 2700, ask: 2705, mid: 2702, decimals: 2 },
+  SOL: { bid: 150, ask: 151, mid: 150.5, decimals: 2 },
+  XRP: { bid: 2.30, ask: 2.31, mid: 2.305, decimals: 4 },
+  DOGE: { bid: 0.25, ask: 0.26, mid: 0.255, decimals: 5 },
+  ADA: { bid: 0.90, ask: 0.91, mid: 0.905, decimals: 4 },
+  AVAX: { bid: 40, ask: 41, mid: 40.5, decimals: 2 },
+  MATIC: { bid: 0.60, ask: 0.61, mid: 0.605, decimals: 4 },
+  LINK: { bid: 20, ask: 20.1, mid: 20.05, decimals: 2 },
 };
 
 const subs = new Set<(payload: { quotes: Record<Sym, Quote> }) => void>();
@@ -78,7 +78,7 @@ export async function startPricesSubscriber(
     ws = new WebSocket(URL);
 
     ws.on("open", () => {
-   
+      console.log("✅ API connected to Binance Stream");
     });
 
     ws.on("message", (buf) => {
