@@ -27,7 +27,7 @@ export type OpenOrderDTO = {
 
 export type Kline = [number, number, number, number, number, number];
 
-const BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
+const BASE = import.meta.env.VITE_API_BASE || "https://exlite-1.onrender.com";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
