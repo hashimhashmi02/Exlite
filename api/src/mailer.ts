@@ -1,11 +1,24 @@
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import { env } from "./env.js";
 import { log } from "./logger.js";
 
 let transporter: nodemailer.Transporter | null = null;
+let resend: Resend | null = null;
 let useEthereal = false;
 
 export async function initMailer() {
+  // Try Resend first
+  if (env.RESEND_API_KEY) {
+    try {
+      resend = new Resend(env.RESEND_API_KEY);
+      log.info("📧 Resend initialized");
+      return;
+    } catch (e) {
+      log.warn("Resend initialization failed", { error: (e as Error).message });
+    }
+  }
+
   // Try Gmail SMTP first if configured
   if (env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS) {
     try {
@@ -23,7 +36,9 @@ export async function initMailer() {
       log.info(`📧 SMTP ready (${env.SMTP_HOST}:${env.SMTP_PORT}) as ${env.SMTP_USER}`);
       return;
     } catch (e) {
-      log.warn("SMTP verification failed, falling back to Ethereal", { error: (e as Error).message });
+      log.warn("SMTP verification failed, falling back to Ethereal", {
+        error: (e as Error).message,
+      });
     }
   }
 
@@ -42,18 +57,20 @@ export async function initMailer() {
     useEthereal = true;
     log.info("📧 Using Ethereal test SMTP - check console for preview links");
   } catch (e) {
-    log.error("Failed to create Ethereal account", { error: (e as Error).message });
+    log.error("Failed to create Ethereal account", {
+      error: (e as Error).message,
+    });
     throw e;
   }
 }
 
 export async function sendMagicLink(to: string, url: string): Promise<void> {
-  if (!transporter) {
+  if (!transporter && !resend) {
     log.warn("Mailer not initialized, attempting to initialize...");
     await initMailer();
   }
-  
-  if (!transporter) throw new Error("mailer-not-initialised");
+
+  if (!transporter && !resend) throw new Error("mailer-not-initialised");
 
   const from = env.MAIL_FROM || env.SMTP_USER || "no-reply@exlite.app";
   const html = `
@@ -71,7 +88,27 @@ export async function sendMagicLink(to: string, url: string): Promise<void> {
     </div>
   `;
 
-  const info = await transporter.sendMail({
+  if (resend) {
+    try {
+      // Use onboarding@resend.dev if default domain not verified, but prefer env.MAIL_FROM
+      // Note: for testing free tier, user MUST use onboarding@resend.dev OR a verified domain.
+      // We will let the user configure MAIL_FROM in env.
+      await resend.emails.send({
+        from,
+        to,
+        subject: "Your Exlite sign-in link",
+        html,
+      });
+      log.info(`📧 Email sent via Resend to ${to}`);
+      return;
+    } catch (e) {
+      log.error("Resend failed", { error: e });
+      // Fallback to SMTP not implemented to avoid complexity, assume Resend is primary if configured.
+      throw e;
+    }
+  }
+
+  const info = await transporter!.sendMail({
     from,
     to,
     subject: "Your Exlite sign-in link",
