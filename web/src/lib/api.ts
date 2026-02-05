@@ -29,7 +29,7 @@ export type Kline = [number, number, number, number, number, number];
 
 const BASE = import.meta.env.VITE_API_BASE || "https://exlite-1.onrender.com";
 
-function getAuthHeaders() {
+function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("token");
   return token ? { "Authorization": `Bearer ${token}` } : {};
 }
