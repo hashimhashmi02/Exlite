@@ -3,7 +3,13 @@ import { verifySessionToken } from './auth.js';
 import './types.js'; // Import to extend Express Request
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const token = req.cookies?.session as string | undefined;
+  let token = req.cookies?.session as string | undefined;
+
+  const authHeader = req.headers.authorization;
+  if (!token && authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.substring(7);
+  }
+
   if (!token) return res.status(401).json({ error: 'Unauthenticated' });
   try {
     const payload = verifySessionToken(token);

@@ -35,6 +35,7 @@ type Sym = engine.AssetSym;
 
 
 const app = express();
+app.set("trust proxy", 1);
 const PORT = Number(process.env.PORT || env.PORT || 8080);
 
 app.use(morgan(env.NODE_ENV === "development" ? "dev" : "combined"));
@@ -145,7 +146,7 @@ app.post("/api/v1/magic/exchange", magicLimiter, validate(MagicExchangeSchema), 
     const { email } = verifyMagicToken(token);
     const session = createSessionToken(email);
     res.cookie("session", session, cookieOpts);
-    return res.json({ ok: true, email });
+    return res.json({ ok: true, email, token: session });
   } catch {
     return res.status(400).json({ ok: false, error: "Invalid token" });
   }
@@ -168,7 +169,13 @@ app.get("/api/v1/magic", (req, res) => {
 
 
 app.get("/api/v1/me", (req, res) => {
-  const token = req.cookies?.session as string | undefined;
+  let token = req.cookies?.session as string | undefined;
+
+  const authHeader = req.headers.authorization;
+  if (!token && authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.substring(7);
+  }
+
   if (!token) return res.json({ authenticated: false });
   try {
     const { email } = verifySessionToken(token);
