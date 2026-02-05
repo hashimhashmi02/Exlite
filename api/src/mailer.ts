@@ -30,6 +30,8 @@ export async function initMailer() {
           user: env.SMTP_USER,
           pass: env.SMTP_PASS.replace(/\s+/g, ""), // Remove any whitespace
         },
+        // Force IPv4 as Render/Gmail IPv6 can be flaky
+        family: 4, 
       });
 
       await transporter.verify();
