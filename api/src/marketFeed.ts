@@ -76,7 +76,7 @@ export async function startPricesSubscriber(
   const streams = Object.values(MAP)
     .map((p) => `${p}@bookTicker`)
     .join("/");
-  const URL = `wss://stream.binance.com:9443/stream?streams=${streams}`;
+  const URL = `wss://data-stream.binance.vision:9443/stream?streams=${streams}`;
 
   let ws: WebSocket | null = null;
   let killed = false;
