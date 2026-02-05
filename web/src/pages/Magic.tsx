@@ -11,8 +11,9 @@ export default function Magic() {
     const token = new URLSearchParams(loc.search).get("token") || "";
     (async () => {
       try {
-        await api.exchangeMagic(token);
-        nav("/trade", { replace: true }); 
+        const res = await api.exchangeMagic(token);
+        if (res.token) localStorage.setItem("token", res.token);
+        nav("/trade", { replace: true });
       } catch (e: any) {
         setMsg(e?.message || "Magic link invalid or expired.");
       }

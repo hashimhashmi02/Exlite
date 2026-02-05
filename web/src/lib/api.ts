@@ -29,8 +29,16 @@ export type Kline = [number, number, number, number, number, number];
 
 const BASE = import.meta.env.VITE_API_BASE || "https://exlite-1.onrender.com";
 
+function getAuthHeaders() {
+  const token = localStorage.getItem("token");
+  return token ? { "Authorization": `Bearer ${token}` } : {};
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
+    if (res.status === 401) {
+      localStorage.removeItem("token");
+    }
     let msg = `HTTP ${res.status}`;
     try {
       const body = await res.json();
@@ -44,7 +52,10 @@ async function json<T>(res: Response): Promise<T> {
 export const api = {
 
   me: (): Promise<Me> =>
-    fetch(`${BASE}/api/v1/me`, { credentials: "include" }).then((r) => json<Me>(r)),
+    fetch(`${BASE}/api/v1/me`, { 
+      credentials: "include",
+      headers: { ...getAuthHeaders() } 
+    }).then((r) => json<Me>(r)),
 
 
   signin: (
@@ -58,7 +69,7 @@ export const api = {
     }).then((r) => json(r)),
 
     
-  exchangeMagic: (token: string): Promise<{ ok: true; email: string }> =>
+  exchangeMagic: (token: string): Promise<{ ok: true; email: string, token: string }> =>
     fetch(`${BASE}/api/v1/magic/exchange`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -66,11 +77,14 @@ export const api = {
       body: JSON.stringify({ token }),
     }).then((r) => json(r)),
 
-  logout: (): Promise<{ ok: true }> =>
-    fetch(`${BASE}/api/v1/logout`, {
+  logout: async (): Promise<{ ok: true }> => {
+    localStorage.removeItem("token");
+    return fetch(`${BASE}/api/v1/logout`, {
       method: "POST",
       credentials: "include",
-    }).then((r) => json(r)),
+      headers: { ...getAuthHeaders() }
+    }).then((r) => json(r));
+  },
 
   supportedAssets: (): Promise<{ assets: Asset[] }> =>
     fetch(`${BASE}/api/v1/supportedAssets`, { credentials: "include" })
@@ -81,17 +95,26 @@ export const quotes = {
   get: (assets: string[]): Promise<{ quotes: Record<string, Quote>; spreadBips: number }> =>
     fetch(
       `${BASE}/api/v1/quotes?assets=${encodeURIComponent(assets.join(","))}`,
-      { credentials: "include" }
+      { 
+        credentials: "include",
+        headers: { ...getAuthHeaders() } 
+      }
     ).then((r) => json<{ quotes: Record<string, Quote>; spreadBips: number }>(r)),
 };
 
 export const orders = {
   open: (): Promise<{ orders: OpenOrderDTO[] }> =>
-    fetch(`${BASE}/api/v1/openOrders`, { credentials: "include" })
+    fetch(`${BASE}/api/v1/openOrders`, { 
+      credentials: "include",
+      headers: { ...getAuthHeaders() } 
+    })
       .then((r) => json<{ orders: OpenOrderDTO[] }>(r)),
 
   closed: (): Promise<{ orders: any[] }> =>
-    fetch(`${BASE}/api/v1/closedOrders`, { credentials: "include" })
+    fetch(`${BASE}/api/v1/closedOrders`, { 
+      credentials: "include",
+      headers: { ...getAuthHeaders() } 
+    })
       .then((r) => json<{ orders: any[] }>(r)),
 };
 
@@ -99,20 +122,30 @@ export const trading = {
   price: (asset: string): Promise<PriceResp> =>
     fetch(`${BASE}/api/v1/price?asset=${encodeURIComponent(asset)}`, {
       credentials: "include",
+      headers: { ...getAuthHeaders() }
     }).then((r) => json<PriceResp>(r)),
 
   balanceUsd: (): Promise<UsdBalance> =>
-    fetch(`${BASE}/api/v1/balance/usd`, { credentials: "include" })
+    fetch(`${BASE}/api/v1/balance/usd`, { 
+      credentials: "include",
+      headers: { ...getAuthHeaders() } 
+    })
       .then((r) => json<UsdBalance>(r)),
 
   balances: (): Promise<AllBalances> =>
-    fetch(`${BASE}/api/v1/balance`, { credentials: "include" })
+    fetch(`${BASE}/api/v1/balance`, { 
+      credentials: "include",
+      headers: { ...getAuthHeaders() } 
+    })
       .then((r) => json<AllBalances>(r)),
 
   create: (body: TradeCreateBody): Promise<TradeCreateResp> =>
     fetch(`${BASE}/api/v1/trade/create`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        ...getAuthHeaders()
+      },
       credentials: "include",
       body: JSON.stringify(body),
     }).then((r) => json<TradeCreateResp>(r)),
@@ -120,7 +153,10 @@ export const trading = {
   close: (orderId: string): Promise<TradeCloseResp> =>
     fetch(`${BASE}/api/v1/trade/close`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        ...getAuthHeaders() 
+      },
       credentials: "include",
       body: JSON.stringify({ orderId }),
     }).then((r) => json<TradeCloseResp>(r)),
@@ -128,12 +164,26 @@ export const trading = {
   klines: (asset: string, limit = 240, interval = '1m'): Promise<Kline[]> =>
     fetch(
       `${BASE}/api/v1/klines?asset=${encodeURIComponent(asset)}&interval=${interval}&limit=${limit}`,
-      { credentials: "include" }
+      { 
+        credentials: "include",
+        headers: { ...getAuthHeaders() } 
+      }
     ).then((r) => json<Kline[]>(r)),
 };
 
 export function openQuoteSSE(onMsg: (p: any) => void) {
-  const es = new EventSource(`${BASE}/api/v1/stream/quotes`, { withCredentials: true });
+  // EventSource doesn't support custom headers easily.
+  // We can try adding the token to the URL query param?
+  // Or rely on cookies for SSE (since it's a GET request, cookies might work better if we stick with SameSite=None).
+  // For now, let's append token to URL just in case the backend supports query param auth (it doesn't yet, but we can add if needed).
+  // Actually, let's skip for now and rely on cookie for SSE or add query param support later. 
+  // Let's assume cookies work for SSE or we add query param auth to backend later.
+  // Wait, if cookies fail, SSE will fail.
+  // I should add ?token=... to SSE url and update backend to check query param.
+  
+  const token = localStorage.getItem("token");
+  const url = `${BASE}/api/v1/stream/quotes${token ? `?token=${token}` : ''}`;
+  const es = new EventSource(url, { withCredentials: true });
   es.onmessage = (ev) => {
     try { onMsg(JSON.parse(ev.data)); } catch {}
   };
