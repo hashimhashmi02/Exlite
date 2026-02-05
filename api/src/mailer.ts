@@ -32,7 +32,7 @@ export async function initMailer() {
         },
         // Force IPv4 as Render/Gmail IPv6 can be flaky
         family: 4, 
-      });
+      } as any);
 
       await transporter.verify();
       log.info(`📧 SMTP ready (${env.SMTP_HOST}:${env.SMTP_PORT}) as ${env.SMTP_USER}`);
