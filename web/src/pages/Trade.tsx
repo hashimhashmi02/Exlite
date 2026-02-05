@@ -23,7 +23,7 @@ export default function Trade() {
   const [loading, setLoading] = useState(true);
   const [openOrders, setOpenOrders] = useState<any[]>([]);
   const [closedOrders, setClosedOrders] = useState<any[]>([]);
-  const [timeframe, setTimeframe] = useState('1m');
+
   // Initial asset load
   useEffect(() => {
     let dead = false;
@@ -221,22 +221,9 @@ export default function Trade() {
           )}
 
           {/* Timeframe Toolbar */}
-          <div className="absolute top-3 left-3 flex gap-1 z-10 bg-[#1a1d24] border border-[#2a2e39] rounded p-0.5">
-            {['1m', '5m', '15m', '1h', '4h', '1d'].map(tf => (
-              <button
-                key={tf}
-                onClick={() => setTimeframe(tf)}
-                className={`px-2.5 py-1 text-[10px] rounded-sm transition-colors ${timeframe === tf
-                    ? 'bg-yellow-500 text-black font-bold'
-                    : 'text-gray-400 hover:text-white hover:bg-[#2a2e39]'
-                  }`}
-              >
-                {tf.toUpperCase()}
-              </button>
-            ))}
-          </div>
 
-          <ChartPanel asset={picked} height={600} interval={timeframe} />
+
+          <ChartPanel asset={picked} height={600} interval="1h" />
         </div>
 
         {/* Bottom Panel */}
