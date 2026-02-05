@@ -49,7 +49,7 @@ export async function getKlines(
 ): Promise<[number, string, string, string, string, string][]> {
   const sym = (String(asset).toUpperCase() as Sym) || "BTC";
   const pair = MAP[sym].toUpperCase();
-  const url = `https://api.binance.com/api/v3/klines?symbol=${pair}&interval=${interval}&limit=${limit}`;
+  const url = `https://data-api.binance.vision/api/v3/klines?symbol=${pair}&interval=${interval}&limit=${limit}`;
   try {
     const res = await fetch(url, { headers: { "User-Agent": "Exlite/1.0" } });
     if (!res.ok) {
