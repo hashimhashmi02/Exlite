@@ -9,7 +9,7 @@ const EnvSchema = z.object({
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
   JWT_SECRET: z.string().min(16),
 
-  REDIS_URL: z.string().url().default('redis://127.0.0.1:6379'),
+  REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
 
   SMTP_HOST: z.string().default('smtp.gmail.com'),
   SMTP_PORT: z.coerce.number().default(465),
