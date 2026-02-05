@@ -50,10 +50,18 @@ export async function getKlines(
   const sym = (String(asset).toUpperCase() as Sym) || "BTC";
   const pair = MAP[sym].toUpperCase();
   const url = `https://api.binance.com/api/v3/klines?symbol=${pair}&interval=${interval}&limit=${limit}`;
-  const res = await fetch(url);
-  const raw = (await res.json()) as any[];
-
-  return raw.map((r) => [r[0], r[1], r[2], r[3], r[4], r[5]]);
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": "Exlite/1.0" } });
+    if (!res.ok) {
+      console.error("Binance K-lines failed:", res.status, await res.text());
+      return [];
+    }
+    const raw = (await res.json()) as any[];
+    return raw.map((r) => [r[0], r[1], r[2], r[3], r[4], r[5]]);
+  } catch (e) {
+    console.error("Binance fetch error:", e);
+    return [];
+  }
 }
 
 
